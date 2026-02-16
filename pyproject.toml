@@ -1,0 +1,41 @@
+[project]
+name = "mac-notify"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+  "ruff",
+  "pyright",
+  "pytest",
+  "pytest-cov",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+  "D",       # pydocstyle — ドキュメント強制は後で検討
+  "ANN101",  # self の型注釈不要
+  "ANN102",  # cls の型注釈不要
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+  "S101",    # assert 許可
+  "ANN",     # テストの型注釈は緩めに
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["src"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
