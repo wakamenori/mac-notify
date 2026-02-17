@@ -2,37 +2,45 @@
 
 ## プロジェクト概要
 
-macOS の集中モード中に通知を収集し、タスク終了時に要約表示するメニューバー常駐アプリ。
-緊急通知は Gemini 2.5 Flash Lite で判定し、集中モード中でも即時アラートを出す。
+macOS の集中モード中に通知を収集し、タスク終了時に要約表示するメニューバー常駐トレイアプリ。
+緊急通知は Gemini で判定し、集中モード中でも即時アラートを出す。
 
 ## 技術スタック
 
-- Python 3.12+ / uv
-- rumps（メニューバーアプリ）
-- Gemini 2.5 Flash Lite（緊急度判定・要約）
-- SQLite3（macOS 通知センター DB 読み取り）
-- Ruff + Pyright（静的解析）
-- pytest（テスト）
+- Rust（バックエンド） + TypeScript（フロントエンド）
+- Tauri v2（トレイアプリフレームワーク）
+- Vite（フロントエンドビルド）
+- Gemini API（緊急度判定）
+- rusqlite（macOS 通知センター DB 読み取り）
 
 ## ディレクトリ構成
 
 ```
-src/           # アプリケーションコード
-tests/         # テストコード
+src/                # フロントエンド (TypeScript)
+src-tauri/          # Rust バックエンド
+  src/
+    main.rs         # エントリポイント
+    commands.rs     # Tauri コマンド
+    db.rs           # SQLite 操作
+    focus.rs        # 集中モード検知
+    gemini.rs       # Gemini API 連携
+    models.rs       # データモデル
+    orchestrator.rs # オーケストレーション
+scripts/            # ユーティリティスクリプト
 ```
 
 ## コマンド
 
 ```bash
-uv sync                      # 依存インストール
-uv run ruff check .          # リント
-uv run ruff format .         # フォーマット
-uv run pyright               # 型チェック
-uv run pytest                # テスト
-uv run pytest --cov          # カバレッジ付きテスト
+npm install                          # フロントエンド依存インストール
+npm run tauri:dev                    # 開発モード起動
+npm run tauri:build                  # プロダクションビルド
+cd src-tauri && cargo clippy         # Rust リント
+cd src-tauri && cargo fmt            # Rust フォーマット
+cd src-tauri && cargo check          # Rust 型チェック
 ```
 
 ## ルール
 
-- コードを変更・追加したら、必ず `uv run ruff check .` と `uv run pyright` を実行して問題がないことを確認する
-- テストがあるコードを変更した場合は `uv run pytest` も実行する
+- Rust コードを変更・追加したら、必ず `cd src-tauri && cargo clippy` と `cargo fmt --check` を実行して問題がないことを確認する
+- TypeScript コードを変更したら、`npm run build` でビルドエラーがないことを確認する
