@@ -1,11 +1,15 @@
-# Python
+# Node / frontend
+node_modules/
+dist/
+
+# Rust / Tauri
+src-tauri/target/
+target/
+
+# Python (legacy)
 __pycache__/
 *.py[cod]
 *.egg-info/
-dist/
-build/
-
-# Virtual environment
 .venv/
 
 # Environment variables

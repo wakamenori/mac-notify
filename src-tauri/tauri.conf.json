@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/1",
+  "build": {
+    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "npm run dev",
+    "devPath": "http://localhost:1420",
+    "distDir": "../dist"
+  },
+  "package": {
+    "productName": "mac-notify",
+    "version": "0.1.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": false
+    },
+    "bundle": {
+      "active": true,
+      "targets": ["app"],
+      "identifier": "com.wakamenori.mac-notify",
+      "icon": ["icons/icon.icns"]
+    },
+    "systemTray": {
+      "iconPath": "icons/tray.png",
+      "iconAsTemplate": true
+    },
+    "windows": [
+      {
+        "title": "mac-notify",
+        "width": 680,
+        "height": 420,
+        "visible": false
+      }
+    ]
+  }
+}
