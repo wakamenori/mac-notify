@@ -59,10 +59,26 @@ fn run_osascript(script: &str) {
     }
 }
 
-pub(crate) fn emit_notifications_updated(app: &AppHandle) {
+fn update_tray_title(app: &AppHandle, counts: [usize; 4]) {
+    let labels = ["R4", "R3", "R2", "R1"];
+    let parts: Vec<String> = counts
+        .iter()
+        .zip(labels.iter())
+        .filter(|(c, _)| **c > 0)
+        .map(|(c, l)| format!("{l}:{c}"))
+        .collect();
+    let title = parts.join(" ");
+    #[cfg(target_os = "macos")]
+    if let Err(err) = app.tray_handle().set_title(&title) {
+        warn!("failed to update tray title: {err}");
+    }
+}
+
+pub(crate) fn emit_notifications_updated(app: &AppHandle, counts: [usize; 4]) {
     if let Err(err) = app.emit_all("notifications-updated", ()) {
         warn!("failed to emit notifications-updated: {err}");
     }
+    update_tray_title(app, counts);
 }
 
 fn toggle_main_window(app: &AppHandle) {
@@ -84,7 +100,13 @@ fn toggle_main_window(app: &AppHandle) {
             }
             let _ = window.unminimize();
             let _ = window.set_focus();
-            emit_notifications_updated(app);
+            let counts = app
+                .state::<SharedOrchestrator>()
+                .0
+                .lock()
+                .map(|guard| guard.urgency_counts())
+                .unwrap_or([0; 4]);
+            emit_notifications_updated(app, counts);
         }
         Err(err) => {
             warn!("failed to read window visibility: {err}");
@@ -94,7 +116,7 @@ fn toggle_main_window(app: &AppHandle) {
 
 fn start_polling_thread(app: AppHandle, orchestrator: Arc<Mutex<NotifyOrchestrator>>) {
     thread::spawn(move || loop {
-        let changed = {
+        let result = {
             let mut guard = match orchestrator.lock() {
                 Ok(guard) => guard,
                 Err(err) => {
@@ -103,11 +125,16 @@ fn start_polling_thread(app: AppHandle, orchestrator: Arc<Mutex<NotifyOrchestrat
                     continue;
                 }
             };
-            guard.poll()
+            let changed = guard.poll();
+            if changed {
+                Some(guard.urgency_counts())
+            } else {
+                None
+            }
         };
 
-        if changed {
-            emit_notifications_updated(&app);
+        if let Some(counts) = result {
+            emit_notifications_updated(&app, counts);
         }
 
         thread::sleep(Duration::from_secs(POLL_INTERVAL_SECONDS));
@@ -125,11 +152,14 @@ fn handle_tray_menu_event(app: &AppHandle, id: &str) {
                 .0
                 .lock()
                 .ok()
-                .map(|mut guard| guard.clear_all())
-                .unwrap_or(0);
-            if cleared > 0 {
-                emit_notifications_updated(app);
-                show_notification("通知クリア", &format!("{}件を削除しました", cleared));
+                .map(|mut guard| {
+                    let c = guard.clear_all();
+                    (c, guard.urgency_counts())
+                })
+                .unwrap_or((0, [0; 4]));
+            if cleared.0 > 0 {
+                emit_notifications_updated(app, cleared.1);
+                show_notification("通知クリア", &format!("{}件を削除しました", cleared.0));
             }
         }
         "summarize" => {

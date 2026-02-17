@@ -27,7 +27,8 @@ pub fn clear_notification(
         .map_err(|err| format!("state lock error: {err}"))?;
     let cleared = guard.clear_notification(id);
     if cleared {
-        emit_notifications_updated(&app);
+        let counts = guard.urgency_counts();
+        emit_notifications_updated(&app, counts);
     }
     Ok(cleared)
 }
@@ -44,7 +45,8 @@ pub fn clear_app_notifications(
         .map_err(|err| format!("state lock error: {err}"))?;
     let cleared = guard.clear_app_notifications(&bundle_id);
     if cleared > 0 {
-        emit_notifications_updated(&app);
+        let counts = guard.urgency_counts();
+        emit_notifications_updated(&app, counts);
     }
     Ok(cleared)
 }
@@ -60,7 +62,8 @@ pub fn clear_all_notifications(
         .map_err(|err| format!("state lock error: {err}"))?;
     let cleared = guard.clear_all();
     if cleared > 0 {
-        emit_notifications_updated(&app);
+        let counts = guard.urgency_counts();
+        emit_notifications_updated(&app, counts);
     }
     Ok(cleared)
 }
@@ -77,7 +80,8 @@ pub fn inject_dummy_notifications(
         .lock()
         .map_err(|err| format!("state lock error: {err}"))?;
     let inserted = guard.inject_dummy_notifications(insert_count);
-    emit_notifications_updated(&app);
+    let counts = guard.urgency_counts();
+    emit_notifications_updated(&app, counts);
     Ok(inserted)
 }
 

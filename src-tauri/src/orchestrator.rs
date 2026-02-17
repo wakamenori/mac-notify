@@ -204,6 +204,19 @@ impl NotifyOrchestrator {
             .collect()
     }
 
+    pub fn urgency_counts(&self) -> [usize; 4] {
+        let mut counts = [0usize; 4];
+        for n in &self.collected {
+            match n.urgency {
+                UrgencyLevel::Critical => counts[0] += 1,
+                UrgencyLevel::High => counts[1] += 1,
+                UrgencyLevel::Medium => counts[2] += 1,
+                UrgencyLevel::Low => counts[3] += 1,
+            }
+        }
+        counts
+    }
+
     pub fn clear_notification(&mut self, id: i64) -> bool {
         let before = self.collected.len();
         self.collected.retain(|n| n.id != id);
