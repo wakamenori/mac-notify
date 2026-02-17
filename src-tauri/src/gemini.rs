@@ -34,14 +34,24 @@ impl Default for AppPrompts {
 impl AppPrompts {
     pub fn load(path: &Path) -> Self {
         let map = match fs::read_to_string(path) {
-            Ok(content) => match serde_json::from_str::<HashMap<String, AppPromptConfig>>(&content)
-            {
-                Ok(parsed) => parsed,
-                Err(err) => {
-                    warn!("Failed to parse app_prompts.json: {err:#}");
+            Ok(content) => {
+                // Try nested format first: {"bundleId": {"context": "..."}}
+                if let Ok(parsed) =
+                    serde_json::from_str::<HashMap<String, AppPromptConfig>>(&content)
+                {
+                    parsed
+                // Fall back to flat format: {"bundleId": "context string"}
+                } else if let Ok(flat) =
+                    serde_json::from_str::<HashMap<String, String>>(&content)
+                {
+                    flat.into_iter()
+                        .map(|(k, v)| (k, AppPromptConfig { context: v }))
+                        .collect()
+                } else {
+                    warn!("Failed to parse app_prompts.json");
                     HashMap::new()
                 }
-            },
+            }
             Err(_) => HashMap::new(),
         };
         Self {
@@ -73,10 +83,15 @@ impl AppPrompts {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let serializable: BTreeMap<&str, &str> = self
+        let serializable: BTreeMap<&str, serde_json::Value> = self
             .map
             .iter()
-            .map(|(k, v)| (k.as_str(), v.context.as_str()))
+            .map(|(k, v)| {
+                (
+                    k.as_str(),
+                    serde_json::json!({ "context": v.context }),
+                )
+            })
             .collect();
         let json = serde_json::to_string_pretty(&serializable)?;
         fs::write(&self.path, json)?;
