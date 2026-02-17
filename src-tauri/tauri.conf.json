@@ -4,7 +4,8 @@
     "beforeBuildCommand": "npm run build",
     "beforeDevCommand": "npm run dev",
     "devPath": "http://localhost:1420",
-    "distDir": "../dist"
+    "distDir": "../dist",
+    "withGlobalTauri": true
   },
   "package": {
     "productName": "mac-notify",
@@ -27,8 +28,11 @@
     "windows": [
       {
         "title": "mac-notify",
-        "width": 680,
-        "height": 420,
+        "width": 520,
+        "height": 640,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "transparent": false,
         "visible": false
       }
     ]

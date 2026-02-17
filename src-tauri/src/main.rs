@@ -14,14 +14,17 @@ use log::{error, warn};
 use plist::Value as PlistValue;
 use reqwest::blocking::Client;
 use rusqlite::{params, Connection, OpenFlags};
+use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::{
-    AppHandle, CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu,
-    SystemTrayMenuItem,
+    AppHandle, CustomMenuItem, Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu,
+    SystemTrayMenuItem, WindowEvent,
 };
 
 const POLL_INTERVAL_SECONDS: u64 = 5;
 const GEMINI_MODEL: &str = "gemini-2.5-flash-lite";
+const MAX_NOTIFICATIONS_PER_APP: usize = 12;
+const MAX_DUMMY_INSERT_COUNT: usize = 30;
 
 const SCHEMA_QUERY_Z: &str = "SELECT rec.Z_PK, rec.ZDATA, app.ZBUNDLEID \
 FROM ZNOTIFICATIONENTRY rec \
@@ -51,15 +54,58 @@ struct Notification {
 }
 
 #[derive(Debug, Clone)]
+struct AnalyzedNotification {
+    id: i64,
+    title: String,
+    body: String,
+    subtitle: String,
+    bundle_id: String,
+    app_name: String,
+    urgency: UrgencyLevel,
+    summary_line: String,
+    reason: String,
+}
+
+#[derive(Debug, Clone)]
+struct NotificationAnalysis {
+    urgency: UrgencyLevel,
+    summary_line: String,
+    reason: String,
+}
+
+#[derive(Debug, Clone)]
 struct NotificationSummary {
     text: String,
     notification_count: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 enum UrgencyLevel {
-    Normal,
-    Urgent,
+    Critical,
+    High,
+    Medium,
+    Low,
+}
+
+impl UrgencyLevel {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Critical => "R4",
+            Self::High => "R3",
+            Self::Medium => "R2",
+            Self::Low => "R1",
+        }
+    }
+
+    fn color(self) -> &'static str {
+        match self {
+            Self::Critical => "#ef4444",
+            Self::High => "#f97316",
+            Self::Medium => "#f59e0b",
+            Self::Low => "#22c55e",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,6 +119,31 @@ struct ParsedPlist {
     title: String,
     body: String,
     subtitle: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UiNotification {
+    id: i64,
+    title: String,
+    body: String,
+    subtitle: String,
+    bundle_id: String,
+    app_name: String,
+    urgency_level: UrgencyLevel,
+    urgency_label: String,
+    urgency_color: String,
+    summary_line: String,
+    reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UiNotificationGroup {
+    bundle_id: String,
+    app_name: String,
+    notifications: Vec<UiNotification>,
+    hidden_count: usize,
 }
 
 struct NotificationDb {
@@ -258,7 +329,7 @@ struct NotifyOrchestrator {
     focus_detector: FocusModeDetector,
     gemini: GeminiClient,
     last_rowid: i64,
-    collected: Vec<Notification>,
+    collected: Vec<AnalyzedNotification>,
     was_focused: bool,
 }
 
@@ -280,8 +351,9 @@ impl NotifyOrchestrator {
         })
     }
 
-    fn poll(&mut self) {
+    fn poll(&mut self) -> bool {
         let is_focused = self.focus_detector.get_state() == FocusState::Active;
+        let mut changed = false;
 
         match self.reader.read_new(self.last_rowid) {
             Ok(new_notifications) => {
@@ -289,7 +361,7 @@ impl NotifyOrchestrator {
                     self.last_rowid = last.rowid;
                 }
                 if is_focused {
-                    self.handle_new_notifications(new_notifications);
+                    changed = self.handle_new_notifications(new_notifications) || changed;
                 }
             }
             Err(err) => {
@@ -299,50 +371,55 @@ impl NotifyOrchestrator {
 
         if !is_focused && self.was_focused && !self.collected.is_empty() {
             self.on_focus_ended();
+            changed = true;
         }
 
         self.was_focused = is_focused;
+        changed
     }
 
-    fn handle_new_notifications(&mut self, notifications: Vec<Notification>) {
+    fn handle_new_notifications(&mut self, notifications: Vec<Notification>) -> bool {
+        let mut changed = false;
+
         for notification in notifications {
-            if self.classify_urgency(&notification) == UrgencyLevel::Urgent {
+            let analysis = self.analyze_notification(&notification);
+            if analysis.urgency == UrgencyLevel::Critical {
                 show_dialog(
                     "緊急通知",
                     &format!("{}\n{}", notification.title, notification.body),
                 );
-                continue;
             }
-            self.collected.push(notification);
+
+            self.collected.push(AnalyzedNotification {
+                id: notification.rowid,
+                title: notification.title,
+                body: notification.body,
+                subtitle: notification.subtitle,
+                bundle_id: notification.bundle_id.clone(),
+                app_name: app_name_from_bundle(&notification.bundle_id),
+                urgency: analysis.urgency,
+                summary_line: analysis.summary_line,
+                reason: analysis.reason,
+            });
+            changed = true;
         }
+
+        changed
     }
 
-    fn classify_urgency(&self, notification: &Notification) -> UrgencyLevel {
-        if !self.gemini.can_use() {
-            return UrgencyLevel::Normal;
+    fn analyze_notification(&self, notification: &Notification) -> NotificationAnalysis {
+        if self.gemini.can_use() {
+            let prompt = build_analysis_prompt(notification);
+            match self.gemini.generate_text(&prompt) {
+                Ok(text) => match parse_analysis_response(&text, notification) {
+                    Some(parsed) => return parsed,
+                    None => warn!("analysis response parse failed for {}", notification.rowid),
+                },
+                Err(err) => warn!("notification analysis failed: {err:#}"),
+            }
         }
 
-        let prompt = format!(
-            "以下の通知が緊急かどうかを判定してください。\n\
-緊急の例: 電話の着信、セキュリティアラート、システム警告、災害通知\n\
-通常の例: メール、チャット、アプリ更新、ニュース\n\n\
-通知:\n\
-アプリ: {}\n\
-タイトル: {}\n\
-本文: {}\n\n\
-JSON で回答してください: {{\"urgency\": \"urgent\"}} または {{\"urgency\": \"normal\"}}",
-            notification.bundle_id, notification.title, notification.body
-        );
-
-        let response_text = match self.gemini.generate_text(&prompt) {
-            Ok(text) => text,
-            Err(err) => {
-                warn!("Urgency classification failed: {err:#}");
-                return UrgencyLevel::Normal;
-            }
-        };
-
-        parse_urgency_response(&response_text)
+        fallback_analysis(notification)
     }
 
     fn on_focus_ended(&mut self) {
@@ -352,7 +429,6 @@ JSON で回答してください: {{\"urgency\": \"urgent\"}} または {{\"urge
             &format!("{}件の通知があります", summary.notification_count),
         );
         show_dialog("通知まとめ", &summary.text);
-        self.collected.clear();
     }
 
     fn summarize_collected(&self) -> Option<String> {
@@ -362,7 +438,7 @@ JSON で回答してください: {{\"urgency\": \"urgent\"}} または {{\"urge
         Some(self.summarize(&self.collected).text)
     }
 
-    fn summarize(&self, notifications: &[Notification]) -> NotificationSummary {
+    fn summarize(&self, notifications: &[AnalyzedNotification]) -> NotificationSummary {
         if notifications.is_empty() {
             return NotificationSummary {
                 text: "通知はありません。".to_string(),
@@ -386,44 +462,269 @@ JSON で回答してください: {{\"urgency\": \"urgent\"}} または {{\"urge
         }
     }
 
-    fn collected_count(&self) -> usize {
-        self.collected.len()
+    fn notification_groups(&self) -> Vec<UiNotificationGroup> {
+        let mut grouped: BTreeMap<String, Vec<UiNotification>> = BTreeMap::new();
+
+        for item in self.collected.iter().rev() {
+            let entry = grouped.entry(item.bundle_id.clone()).or_default();
+            entry.push(UiNotification {
+                id: item.id,
+                title: item.title.clone(),
+                body: item.body.clone(),
+                subtitle: item.subtitle.clone(),
+                bundle_id: item.bundle_id.clone(),
+                app_name: item.app_name.clone(),
+                urgency_level: item.urgency,
+                urgency_label: item.urgency.label().to_string(),
+                urgency_color: item.urgency.color().to_string(),
+                summary_line: item.summary_line.clone(),
+                reason: item.reason.clone(),
+            });
+        }
+
+        grouped
+            .into_iter()
+            .map(|(bundle_id, mut notifications)| {
+                let app_name = notifications
+                    .first()
+                    .map(|n| n.app_name.clone())
+                    .unwrap_or_else(|| app_name_from_bundle(&bundle_id));
+                let hidden_count = notifications
+                    .len()
+                    .saturating_sub(MAX_NOTIFICATIONS_PER_APP);
+                notifications.truncate(MAX_NOTIFICATIONS_PER_APP);
+
+                UiNotificationGroup {
+                    bundle_id,
+                    app_name,
+                    notifications,
+                    hidden_count,
+                }
+            })
+            .collect()
+    }
+
+    fn clear_notification(&mut self, id: i64) -> bool {
+        let before = self.collected.len();
+        self.collected.retain(|n| n.id != id);
+        self.collected.len() != before
+    }
+
+    fn clear_app_notifications(&mut self, bundle_id: &str) -> usize {
+        let before = self.collected.len();
+        self.collected.retain(|n| n.bundle_id != bundle_id);
+        before.saturating_sub(self.collected.len())
+    }
+
+    fn clear_all(&mut self) -> usize {
+        let count = self.collected.len();
+        self.collected.clear();
+        count
+    }
+
+    fn inject_dummy_notifications(&mut self, count: usize) -> usize {
+        const APPS: [(&str, &str); 4] = [
+            ("com.tinyspeck.slackmacgap", "Slack"),
+            ("com.apple.mobilemail", "Mail"),
+            ("com.apple.iCal", "Calendar"),
+            ("com.apple.reminders", "Reminders"),
+        ];
+        const SAMPLES: [(&str, &str, &str, UrgencyLevel); 6] = [
+            (
+                "緊急対応が必要",
+                "プロダクションエラー率が急上昇しています。",
+                "監視通知で即時確認が必要なパターン",
+                UrgencyLevel::Critical,
+            ),
+            (
+                "15:00会議の招待更新",
+                "会議URLが新しいリンクに変更されました。",
+                "本日中に確認すべき更新",
+                UrgencyLevel::High,
+            ),
+            (
+                "レビュー依頼があります",
+                "PR #128 のレビュー依頼が届いています。",
+                "作業中断の優先度は中程度",
+                UrgencyLevel::Medium,
+            ),
+            (
+                "請求書が発行されました",
+                "今月分の請求書を確認してください。",
+                "期限前に確認すればよい通知",
+                UrgencyLevel::Low,
+            ),
+            (
+                "配達予定が更新されました",
+                "荷物の到着予定時刻が変更されました。",
+                "状況把握のための一般通知",
+                UrgencyLevel::Low,
+            ),
+            (
+                "セキュリティ警告",
+                "未確認のログイン試行を検出しました。",
+                "アカウント保護のため早め対応",
+                UrgencyLevel::High,
+            ),
+        ];
+
+        let mut next_virtual_id = self
+            .collected
+            .iter()
+            .map(|n| n.id)
+            .filter(|id| *id < 0)
+            .min()
+            .unwrap_or(0);
+
+        for i in 0..count {
+            next_virtual_id -= 1;
+            let (bundle_id, app_name) = APPS[i % APPS.len()];
+            let (summary_line, body, reason, urgency) = SAMPLES[i % SAMPLES.len()];
+
+            self.collected.push(AnalyzedNotification {
+                id: next_virtual_id,
+                title: summary_line.to_string(),
+                body: body.to_string(),
+                subtitle: "Dummy".to_string(),
+                bundle_id: bundle_id.to_string(),
+                app_name: app_name.to_string(),
+                urgency,
+                summary_line: summary_line.to_string(),
+                reason: reason.to_string(),
+            });
+        }
+
+        count
     }
 }
 
-fn build_summary_prompt(notifications: &[Notification]) -> String {
+fn app_name_from_bundle(bundle_id: &str) -> String {
+    let last = bundle_id.rsplit('.').next().unwrap_or(bundle_id);
+    if last.is_empty() {
+        bundle_id.to_string()
+    } else {
+        last.to_string()
+    }
+}
+
+fn build_analysis_prompt(notification: &Notification) -> String {
+    format!(
+        "以下の通知を分析してください。\\n\
+JSONのみで回答し、追加説明は不要です。\\n\
+スキーマ:\\n\
+{{\\n\
+  \"urgency_level\": \"critical|high|medium|low\",\\n\
+  \"summary_line\": \"30文字以内の要約\",\\n\
+  \"reason\": \"判定理由を1文\"\\n\
+}}\\n\\n\
+通知:\\n\
+アプリ: {}\\n\
+タイトル: {}\\n\
+サブタイトル: {}\\n\
+本文: {}",
+        notification.bundle_id, notification.title, notification.subtitle, notification.body
+    )
+}
+
+fn parse_analysis_response(
+    text: &str,
+    notification: &Notification,
+) -> Option<NotificationAnalysis> {
+    let start = text.find('{')?;
+    let end = text.rfind('}')?;
+    if end < start {
+        return None;
+    }
+
+    let parsed: Value = serde_json::from_str(&text[start..=end]).ok()?;
+    let urgency = match parsed.get("urgency_level").and_then(Value::as_str) {
+        Some("critical") => UrgencyLevel::Critical,
+        Some("high") => UrgencyLevel::High,
+        Some("medium") => UrgencyLevel::Medium,
+        Some("low") => UrgencyLevel::Low,
+        _ => return None,
+    };
+
+    let summary_line = parsed
+        .get("summary_line")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| default_summary_line(notification));
+
+    let reason = parsed
+        .get("reason")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "判定理由は取得できませんでした。".to_string());
+
+    Some(NotificationAnalysis {
+        urgency,
+        summary_line,
+        reason,
+    })
+}
+
+fn fallback_analysis(notification: &Notification) -> NotificationAnalysis {
+    NotificationAnalysis {
+        urgency: UrgencyLevel::Medium,
+        summary_line: default_summary_line(notification),
+        reason: "Gemini分析に失敗したため、ローカル規則で中優先として扱いました。".to_string(),
+    }
+}
+
+fn default_summary_line(notification: &Notification) -> String {
+    let text = if !notification.title.trim().is_empty() {
+        notification.title.trim().to_string()
+    } else if !notification.body.trim().is_empty() {
+        notification.body.trim().to_string()
+    } else if !notification.subtitle.trim().is_empty() {
+        notification.subtitle.trim().to_string()
+    } else {
+        "内容不明の通知".to_string()
+    };
+
+    let mut chars = text.chars().take(60).collect::<String>();
+    if text.chars().count() > 60 {
+        chars.push('…');
+    }
+    chars
+}
+
+fn build_summary_prompt(notifications: &[AnalyzedNotification]) -> String {
     let body = notifications
         .iter()
         .map(|n| {
-            let mut line = format!("[{}]", n.bundle_id);
-            if !n.title.is_empty() {
-                line.push(' ');
-                line.push_str(&n.title);
-            }
-            if !n.subtitle.is_empty() {
-                line.push_str(" - ");
-                line.push_str(&n.subtitle);
-            }
-            if !n.body.is_empty() {
-                line.push_str(": ");
-                line.push_str(&n.body);
-            }
-            line
+            format!(
+                "[{}][{}] {}: {}",
+                n.app_name,
+                n.urgency.label(),
+                n.summary_line,
+                n.body
+            )
         })
         .collect::<Vec<_>>()
         .join("\n");
 
     format!(
-        "以下の macOS 通知を日本語で簡潔に要約してください。\n\
-アプリごとにグループ化し、重要な情報を優先してください。\n\n{}",
+        "以下の通知を日本語で簡潔に要約してください。\\n\
+アプリごとに整理し、対応順が分かる形にしてください。\\n\\n{}",
         body
     )
 }
 
-fn fallback_summary(notifications: &[Notification]) -> String {
+fn fallback_summary(notifications: &[AnalyzedNotification]) -> String {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut critical = 0;
+
     for n in notifications {
-        *counts.entry(n.bundle_id.clone()).or_default() += 1;
+        *counts.entry(n.app_name.clone()).or_default() += 1;
+        if n.urgency == UrgencyLevel::Critical {
+            critical += 1;
+        }
     }
 
     let details = counts
@@ -432,30 +733,12 @@ fn fallback_summary(notifications: &[Notification]) -> String {
         .collect::<Vec<_>>()
         .join("\n");
 
-    format!("通知 {}件:\n{}", notifications.len(), details)
-}
-
-fn parse_urgency_response(text: &str) -> UrgencyLevel {
-    let Some(start) = text.find('{') else {
-        return UrgencyLevel::Normal;
-    };
-    let Some(end) = text.rfind('}') else {
-        return UrgencyLevel::Normal;
-    };
-    if end < start {
-        return UrgencyLevel::Normal;
-    }
-
-    let json_text = &text[start..=end];
-    let parsed: Value = match serde_json::from_str(json_text) {
-        Ok(value) => value,
-        Err(_) => return UrgencyLevel::Normal,
-    };
-
-    match parsed.get("urgency").and_then(Value::as_str) {
-        Some("urgent") => UrgencyLevel::Urgent,
-        _ => UrgencyLevel::Normal,
-    }
+    format!(
+        "通知 {}件 (R4: {}件)\\n{}",
+        notifications.len(),
+        critical,
+        details
+    )
 }
 
 fn is_focus_active(data: &Value) -> bool {
@@ -599,9 +882,42 @@ fn run_osascript(script: &str) {
     }
 }
 
+fn emit_notifications_updated(app: &AppHandle) {
+    if let Err(err) = app.emit_all("notifications-updated", ()) {
+        warn!("failed to emit notifications-updated: {err}");
+    }
+}
+
+fn toggle_main_window(app: &AppHandle) {
+    let Some(window) = app.get_window("main") else {
+        warn!("main window not found");
+        return;
+    };
+
+    match window.is_visible() {
+        Ok(true) => {
+            if let Err(err) = window.hide() {
+                warn!("failed to hide window: {err}");
+            }
+        }
+        Ok(false) => {
+            if let Err(err) = window.show() {
+                warn!("failed to show window: {err}");
+                return;
+            }
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+            emit_notifications_updated(app);
+        }
+        Err(err) => {
+            warn!("failed to read window visibility: {err}");
+        }
+    }
+}
+
 fn start_polling_thread(app: AppHandle, orchestrator: Arc<Mutex<NotifyOrchestrator>>) {
     thread::spawn(move || loop {
-        let count = {
+        let changed = {
             let mut guard = match orchestrator.lock() {
                 Ok(guard) => guard,
                 Err(err) => {
@@ -610,29 +926,34 @@ fn start_polling_thread(app: AppHandle, orchestrator: Arc<Mutex<NotifyOrchestrat
                     continue;
                 }
             };
-            guard.poll();
-            guard.collected_count()
+            guard.poll()
         };
 
-        if let Err(err) = update_tray_count(&app, count) {
-            warn!("Failed to update tray UI: {err}");
+        if changed {
+            emit_notifications_updated(&app);
         }
 
         thread::sleep(Duration::from_secs(POLL_INTERVAL_SECONDS));
     });
 }
 
-fn update_tray_count(app: &AppHandle, count: usize) -> tauri::Result<()> {
-    app.tray_handle()
-        .get_item("count")
-        .set_title(format!("収集済み: {count}件"))?;
-    Ok(())
-}
-
 fn handle_tray_menu_event(app: &AppHandle, id: &str) {
     match id {
         "quit" => {
             app.exit(0);
+        }
+        "clear_all" => {
+            let state = app.state::<SharedOrchestrator>();
+            let cleared = state
+                .0
+                .lock()
+                .ok()
+                .map(|mut guard| guard.clear_all())
+                .unwrap_or(0);
+            if cleared > 0 {
+                emit_notifications_updated(app);
+                show_notification("通知クリア", &format!("{}件を削除しました", cleared));
+            }
         }
         "summarize" => {
             let state = app.state::<SharedOrchestrator>();
@@ -652,16 +973,108 @@ fn handle_tray_menu_event(app: &AppHandle, id: &str) {
 
 fn tray() -> SystemTray {
     let summarize_item = CustomMenuItem::new("summarize".to_string(), "通知を要約");
-    let count_item = CustomMenuItem::new("count".to_string(), "収集済み: 0件").disabled();
+    let clear_item = CustomMenuItem::new("clear_all".to_string(), "全通知をクリア");
     let quit_item = CustomMenuItem::new("quit".to_string(), "終了");
 
     let menu = SystemTrayMenu::new()
         .add_item(summarize_item)
-        .add_item(count_item)
+        .add_item(clear_item)
         .add_native_item(SystemTrayMenuItem::Separator)
         .add_item(quit_item);
 
-    SystemTray::new().with_menu(menu)
+    let tray = SystemTray::new().with_menu(menu);
+    #[cfg(target_os = "macos")]
+    let tray = tray.with_menu_on_left_click(false);
+
+    tray
+}
+
+#[tauri::command]
+fn get_notification_groups(
+    state: State<'_, SharedOrchestrator>,
+) -> Result<Vec<UiNotificationGroup>, String> {
+    let guard = state
+        .0
+        .lock()
+        .map_err(|err| format!("state lock error: {err}"))?;
+    Ok(guard.notification_groups())
+}
+
+#[tauri::command]
+fn clear_notification(
+    id: i64,
+    state: State<'_, SharedOrchestrator>,
+    app: AppHandle,
+) -> Result<bool, String> {
+    let mut guard = state
+        .0
+        .lock()
+        .map_err(|err| format!("state lock error: {err}"))?;
+    let cleared = guard.clear_notification(id);
+    if cleared {
+        emit_notifications_updated(&app);
+    }
+    Ok(cleared)
+}
+
+#[tauri::command]
+fn clear_app_notifications(
+    bundle_id: String,
+    state: State<'_, SharedOrchestrator>,
+    app: AppHandle,
+) -> Result<usize, String> {
+    let mut guard = state
+        .0
+        .lock()
+        .map_err(|err| format!("state lock error: {err}"))?;
+    let cleared = guard.clear_app_notifications(&bundle_id);
+    if cleared > 0 {
+        emit_notifications_updated(&app);
+    }
+    Ok(cleared)
+}
+
+#[tauri::command]
+fn clear_all_notifications(
+    state: State<'_, SharedOrchestrator>,
+    app: AppHandle,
+) -> Result<usize, String> {
+    let mut guard = state
+        .0
+        .lock()
+        .map_err(|err| format!("state lock error: {err}"))?;
+    let cleared = guard.clear_all();
+    if cleared > 0 {
+        emit_notifications_updated(&app);
+    }
+    Ok(cleared)
+}
+
+#[tauri::command]
+fn inject_dummy_notifications(
+    count: Option<usize>,
+    state: State<'_, SharedOrchestrator>,
+    app: AppHandle,
+) -> Result<usize, String> {
+    let insert_count = count.unwrap_or(8).clamp(1, MAX_DUMMY_INSERT_COUNT);
+    let mut guard = state
+        .0
+        .lock()
+        .map_err(|err| format!("state lock error: {err}"))?;
+    let inserted = guard.inject_dummy_notifications(insert_count);
+    emit_notifications_updated(&app);
+    Ok(inserted)
+}
+
+#[tauri::command]
+fn summarize_notifications(state: State<'_, SharedOrchestrator>) -> Result<String, String> {
+    let guard = state
+        .0
+        .lock()
+        .map_err(|err| format!("state lock error: {err}"))?;
+    guard
+        .summarize_collected()
+        .ok_or_else(|| "収集済み通知はありません。".to_string())
 }
 
 fn main() {
@@ -678,13 +1091,32 @@ fn main() {
 
     tauri::Builder::default()
         .manage(SharedOrchestrator(orchestrator))
+        .invoke_handler(tauri::generate_handler![
+            get_notification_groups,
+            clear_notification,
+            clear_app_notifications,
+            clear_all_notifications,
+            inject_dummy_notifications,
+            summarize_notifications
+        ])
         .system_tray(tray())
-        .on_system_tray_event(|app, event| {
-            if let SystemTrayEvent::MenuItemClick { id, .. } = event {
-                handle_tray_menu_event(app, &id);
+        .on_window_event(|event| {
+            if event.window().label() == "main" {
+                if let WindowEvent::Focused(false) = event.event() {
+                    let _ = event.window().hide();
+                }
             }
         })
+        .on_system_tray_event(|app, event| match event {
+            SystemTrayEvent::LeftClick { .. } => toggle_main_window(app),
+            SystemTrayEvent::MenuItemClick { id, .. } => handle_tray_menu_event(app, &id),
+            _ => {}
+        })
         .setup(|app| {
+            if let Some(window) = app.get_window("main") {
+                let _ = window.hide();
+                let _ = window.set_always_on_top(true);
+            }
             let orchestrator = app.state::<SharedOrchestrator>().0.clone();
             start_polling_thread(app.handle(), orchestrator);
             Ok(())
