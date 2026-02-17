@@ -3,14 +3,14 @@
 ## プロジェクト概要
 
 macOS の集中モード中に通知を収集し、タスク終了時に要約表示するメニューバー常駐トレイアプリ。
-緊急通知は Gemini で判定し、集中モード中でも即時アラートを出す。
+緊急通知は Qwen3:8b (Ollama) で判定し、集中モード中でも即時アラートを出す。
 
 ## 技術スタック
 
 - Rust（バックエンド） + TypeScript（フロントエンド）
 - Tauri v2（トレイアプリフレームワーク）
 - Vite（フロントエンドビルド）
-- Gemini API（緊急度判定）
+- Ollama + Qwen3:8b（緊急度判定・ローカル実行）
 - rusqlite（macOS 通知センター DB 読み取り）
 
 ## ディレクトリ構成
@@ -23,7 +23,7 @@ src-tauri/          # Rust バックエンド
     commands.rs     # Tauri コマンド
     db.rs           # SQLite 操作
     focus.rs        # 集中モード検知
-    gemini.rs       # Gemini API 連携
+    llm.rs          # LLM 連携 (Ollama)
     models.rs       # データモデル
     orchestrator.rs # オーケストレーション
 scripts/            # ユーティリティスクリプト

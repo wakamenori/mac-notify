@@ -3,7 +3,7 @@
 mod commands;
 mod db;
 mod focus;
-mod gemini;
+mod llm;
 mod models;
 mod orchestrator;
 

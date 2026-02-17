@@ -262,7 +262,7 @@ function renderDialog(notification) {
     const app = create("span", "dialog-pill", notification.appName);
     app.style.background = "#334155";
     meta.append(urgency, app);
-    const reasonTitle = create("p", "card-sub", "Gemini判定理由");
+    const reasonTitle = create("p", "card-sub", "AI判定理由");
     const reason = create("p", "dialog-section", notification.reason);
     const originalTitle = create("p", "card-sub", "元通知");
     const original = create("p", "dialog-section", [notification.title, notification.subtitle, notification.body]

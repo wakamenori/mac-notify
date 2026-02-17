@@ -154,65 +154,71 @@ impl IgnoredApps {
     }
 }
 
-const GEMINI_MODEL: &str = "gemini-2.5-flash-lite";
+const LLM_MODEL: &str = "qwen3:8b";
+pub const OLLAMA_BASE_URL: &str = "http://localhost:11434";
 
-pub struct GeminiClient {
-    api_key: String,
+pub struct LlmClient {
     client: Client,
+    available: bool,
 }
 
-impl GeminiClient {
-    pub fn new(api_key: String) -> Self {
-        Self {
-            api_key,
-            client: Client::builder()
-                .timeout(Duration::from_secs(30))
-                .build()
-                .expect("failed to build reqwest client"),
-        }
+impl LlmClient {
+    pub fn new() -> Self {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .expect("failed to build reqwest client");
+
+        let available = client.get(OLLAMA_BASE_URL).send().is_ok();
+
+        Self { client, available }
     }
 
     pub fn can_use(&self) -> bool {
-        !self.api_key.is_empty()
+        self.available
     }
 
     pub fn generate_text(&self, prompt: &str) -> Result<String> {
         if !self.can_use() {
-            bail!("GOOGLE_API_KEY is not set")
+            bail!("Ollama is not running at {OLLAMA_BASE_URL}")
         }
 
-        let endpoint = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-            GEMINI_MODEL, self.api_key
-        );
+        let endpoint = format!("{OLLAMA_BASE_URL}/api/generate");
 
         let response: Value = self
             .client
             .post(endpoint)
             .json(&json!({
-                "contents": [
-                    {
-                        "parts": [{ "text": prompt }]
-                    }
-                ]
+                "model": LLM_MODEL,
+                "prompt": prompt,
+                "stream": false
             }))
             .send()?
             .error_for_status()?
             .json()?;
 
         let text = response
-            .pointer("/candidates/0/content/parts/0/text")
+            .get("response")
             .and_then(Value::as_str)
             .unwrap_or("")
             .trim()
             .to_string();
 
         if text.is_empty() {
-            bail!("Gemini response text is empty")
+            bail!("LLM response text is empty")
         }
+
+        // Remove Qwen3 thinking blocks
+        let text = strip_thinking_tags(&text);
 
         Ok(text)
     }
+}
+
+fn strip_thinking_tags(text: &str) -> String {
+    use regex::Regex;
+    let re = Regex::new(r"<think>[\s\S]*?</think>").expect("invalid regex");
+    re.replace_all(text, "").trim().to_string()
 }
 
 pub fn build_analysis_prompt(notification: &Notification, app_context: Option<&str>) -> String {
@@ -286,7 +292,7 @@ pub fn fallback_analysis(notification: &Notification) -> NotificationAnalysis {
     NotificationAnalysis {
         urgency: UrgencyLevel::Medium,
         summary_line: default_summary_line(notification),
-        reason: "Gemini分析に失敗したため、ローカル規則で中優先として扱いました。".to_string(),
+        reason: "LLM分析に失敗したため、ローカル規則で中優先として扱いました。".to_string(),
     }
 }
 

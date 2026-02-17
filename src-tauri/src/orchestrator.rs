@@ -9,9 +9,9 @@ use log::{error, warn};
 
 use crate::db::{get_notification_db_path, NotificationDb};
 use crate::focus::{get_focus_assertions_path, FocusModeDetector};
-use crate::gemini::{
-    build_analysis_prompt, fallback_analysis, parse_analysis_response, AppPrompts, GeminiClient,
-    IgnoredApps,
+use crate::llm::{
+    build_analysis_prompt, fallback_analysis, parse_analysis_response, AppPrompts, IgnoredApps,
+    LlmClient, OLLAMA_BASE_URL,
 };
 use crate::models::{
     AnalyzedNotification, FocusState, Notification, NotificationAnalysis, UiNotification,
@@ -28,7 +28,7 @@ pub struct SharedOrchestrator(pub Arc<Mutex<NotifyOrchestrator>>);
 pub struct NotifyOrchestrator {
     reader: NotificationDb,
     focus_detector: FocusModeDetector,
-    gemini: GeminiClient,
+    llm: LlmClient,
     app_prompts: AppPrompts,
     ignored_apps: IgnoredApps,
     last_rowid: i64,
@@ -40,7 +40,6 @@ impl NotifyOrchestrator {
     pub fn new() -> Result<Self> {
         let db_path = get_notification_db_path()?;
         let assertions_path = get_focus_assertions_path();
-        let google_api_key = env::var("GOOGLE_API_KEY").unwrap_or_default();
         let mut reader = NotificationDb::new(db_path);
         let initial_rowid = reader.latest_rowid()?;
 
@@ -54,7 +53,7 @@ impl NotifyOrchestrator {
         Ok(Self {
             reader,
             focus_detector: FocusModeDetector::new(assertions_path),
-            gemini: GeminiClient::new(google_api_key),
+            llm: LlmClient::new(),
             app_prompts,
             ignored_apps,
             last_rowid: initial_rowid,
@@ -133,16 +132,23 @@ impl NotifyOrchestrator {
     }
 
     fn analyze_notification(&self, notification: &Notification) -> NotificationAnalysis {
-        if self.gemini.can_use() {
-            let app_context = self.app_prompts.get(&notification.bundle_id);
-            let prompt = build_analysis_prompt(notification, app_context);
-            match self.gemini.generate_text(&prompt) {
-                Ok(text) => match parse_analysis_response(&text, notification) {
-                    Some(parsed) => return parsed,
-                    None => warn!("analysis response parse failed for {}", notification.rowid),
-                },
-                Err(err) => warn!("notification analysis failed: {err:#}"),
-            }
+        if !self.llm.can_use() {
+            warn!("Ollama is not running at {OLLAMA_BASE_URL}");
+            return NotificationAnalysis {
+                urgency: UrgencyLevel::Medium,
+                summary_line: crate::llm::default_summary_line(notification),
+                reason: "Ollamaが起動していないため分析できませんでした。`ollama serve` を実行してください。".to_string(),
+            };
+        }
+
+        let app_context = self.app_prompts.get(&notification.bundle_id);
+        let prompt = build_analysis_prompt(notification, app_context);
+        match self.llm.generate_text(&prompt) {
+            Ok(text) => match parse_analysis_response(&text, notification) {
+                Some(parsed) => return parsed,
+                None => warn!("analysis response parse failed for {}", notification.rowid),
+            },
+            Err(err) => warn!("notification analysis failed: {err:#}"),
         }
 
         fallback_analysis(notification)

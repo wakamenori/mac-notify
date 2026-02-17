@@ -1868,6 +1868,7 @@ dependencies = [
  "env_logger",
  "log",
  "plist",
+ "regex",
  "reqwest 0.12.28",
  "rusqlite",
  "serde",
