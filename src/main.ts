@@ -157,7 +157,10 @@ function render(): void {
       `${group.appName} (${group.notifications.length + group.hiddenCount})`,
     );
 
-    const clearAppBtn = create("button", "btn secondary", "このアプリをクリア");
+    const clearAppBtn = create("button", "group-clear-btn");
+    clearAppBtn.title = "このアプリをクリア";
+    clearAppBtn.innerHTML =
+      '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h12M5.33 4V2.67a1.33 1.33 0 0 1 1.34-1.34h2.66a1.33 1.33 0 0 1 1.34 1.34V4M6.67 7.33v4M9.33 7.33v4"/><path d="M3.33 4h9.34l-.67 9.33a1.33 1.33 0 0 1-1.33 1.34H5.33A1.33 1.33 0 0 1 4 13.33L3.33 4z"/></svg>';
     clearAppBtn.addEventListener("click", async () => {
       await clearApp(group.bundleId);
     });
@@ -256,17 +259,21 @@ function renderDialog(notification: UiNotification): HTMLElement {
     "dialog-section",
     [notification.title, notification.subtitle, notification.body]
       .filter(Boolean)
-      .join("\n"),
+      .join("\n\n"),
   );
 
   const actions = create("div", "dialog-actions");
-  const closeBtn = create("button", "btn secondary", "閉じる");
+  const closeBtn = create("button", "dialog-icon-btn", "←");
+  closeBtn.title = "閉じる";
   closeBtn.addEventListener("click", () => {
     state.selected = null;
     render();
   });
 
-  const clearBtn = create("button", "btn warn", "この通知をクリア");
+  const clearBtn = create("button", "dialog-icon-btn warn");
+  clearBtn.innerHTML =
+    '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h12M5.33 4V2.67a1.33 1.33 0 0 1 1.34-1.34h2.66a1.33 1.33 0 0 1 1.34 1.34V4M6.67 7.33v4M9.33 7.33v4"/><path d="M3.33 4h9.34l-.67 9.33a1.33 1.33 0 0 1-1.33 1.34H5.33A1.33 1.33 0 0 1 4 13.33L3.33 4z"/></svg>';
+  clearBtn.title = "この通知をクリア";
   clearBtn.addEventListener("click", async () => {
     await clearOne(notification.id);
     state.selected = null;
