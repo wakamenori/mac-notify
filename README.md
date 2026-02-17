@@ -15,19 +15,14 @@ macOS の集中モード中に通知を収集し、メニューバー常駐で�
 - `Tauri` (Rust backend)
 - `TypeScript + Vite` (frontend shell)
 - `rusqlite` (Notification DB 読み取り)
-- `reqwest` (Gemini API 呼び出し)
+- `reqwest` + Ollama (Qwen3:8b によるローカル LLM 緊急度判定)
 
 ## 必須条件
 
 - macOS 15 (Tahoe) 以上
 - フルディスクアクセス（Terminal / iTerm 等）
-- `.env` に `GOOGLE_API_KEY` 設定
-
-`.env` 例:
-
-```bash
-GOOGLE_API_KEY=your_google_api_key
-```
+- [Ollama](https://ollama.com/) がインストール済みで `ollama serve` が起動していること
+- `ollama pull qwen3:8b` でモデルがダウンロード済みであること
 
 ## 開発
 
@@ -45,4 +40,4 @@ npm run tauri:build
 ## 補足
 
 - 旧 Python 実装から Tauri 実装へ移行済み。
-- `.env` は起動時に自動読込されます（`dotenvy`）。
+- Ollama が起動していない場合、通知分析はフォールバック（中優先）で動作します。
