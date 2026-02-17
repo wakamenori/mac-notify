@@ -81,23 +81,38 @@ fn run_osascript(script: &str) {
 
 struct TrayState(tauri::tray::TrayIcon);
 
-fn update_tray_title(app: &AppHandle, counts: [usize; 4]) {
-    let labels = ["R4", "R3", "R2", "R1"];
-    let parts: Vec<String> = counts
-        .iter()
-        .zip(labels.iter())
-        .filter(|(c, _)| **c > 0)
-        .map(|(c, l)| format!("{l}:{c}"))
-        .collect();
-    let title = if parts.is_empty() {
+fn highest_urgency_index(counts: [usize; 4]) -> Option<usize> {
+    // counts: [critical, high, medium, low]
+    counts.iter().position(|&c| c > 0)
+}
+
+fn update_tray(app: &AppHandle, counts: [usize; 4]) {
+    let total: usize = counts.iter().sum();
+    let title = if total == 0 {
         String::new()
     } else {
-        parts.join(" ")
+        format!("{total}")
     };
+
     #[cfg(target_os = "macos")]
     if let Some(state) = app.try_state::<TrayState>() {
         if let Err(err) = state.0.set_title(Some(&title)) {
             warn!("failed to update tray title: {err}");
+        }
+
+        let (icon, as_template) = match highest_urgency_index(counts) {
+            Some(0) => (tauri::include_image!("icons/tray-critical.png"), false),
+            Some(1) => (tauri::include_image!("icons/tray-high.png"), false),
+            Some(2) => (tauri::include_image!("icons/tray-medium.png"), false),
+            Some(3) => (tauri::include_image!("icons/tray-low.png"), false),
+            _ => (tauri::include_image!("icons/tray.png"), true),
+        };
+
+        if let Err(err) = state.0.set_icon(Some(icon)) {
+            warn!("failed to update tray icon: {err}");
+        }
+        if let Err(err) = state.0.set_icon_as_template(as_template) {
+            warn!("failed to set icon template mode: {err}");
         }
     }
 }
@@ -106,7 +121,7 @@ pub(crate) fn emit_notifications_updated(app: &AppHandle, counts: [usize; 4]) {
     if let Err(err) = app.emit("notifications-updated", ()) {
         warn!("failed to emit notifications-updated: {err}");
     }
-    update_tray_title(app, counts);
+    update_tray(app, counts);
 }
 
 fn toggle_main_window(app: &AppHandle) {

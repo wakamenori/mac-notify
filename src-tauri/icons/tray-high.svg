@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">
+  <!-- ベル / Bell -->
+  <path d="M22 6 C22 6 16 6 14 14 C12 22 10 26 8 28 L36 28 C34 26 32 22 30 14 C28 6 22 6 22 6 Z" fill="#f97316"/>
+  <!-- Bell bottom rim -->
+  <rect x="8" y="28" width="28" height="3" rx="1.5" fill="#f97316"/>
+  <!-- Clapper -->
+  <circle cx="22" cy="35" r="3.5" fill="#f97316"/>
+  <!-- Highlight -->
+  <path d="M22 6 C22 6 18 7 16.5 13 C15 19 14 24 12 27 L22 27 L22 6 Z" fill="#fdba74" opacity="0.5"/>
+</svg>

@@ -107,7 +107,7 @@ function render() {
             const section = create("section", "group");
             section.style.animationDelay = `${groupIdx * 0.06}s`;
             const groupHeader = create("div", "group-header");
-            const groupTitle = create("h2", "group-title", `${group.appName} (${group.notifications.length + group.hiddenCount})`);
+            const groupTitle = create("h2", "group-title", `${group.appName} (${group.notifications.length})`);
             const groupActions = create("div", "group-actions");
             const promptBtn = create("button", "group-clear-btn");
             promptBtn.title = "このアプリのプロンプトを設定";
@@ -156,9 +156,6 @@ function render() {
                 card.style.animationDelay = `${groupIdx * 0.06 + cardIdx * 0.03}s`;
                 cards.append(card);
                 cardIdx++;
-            }
-            if (group.hiddenCount > 0) {
-                cards.append(create("p", "hidden-row", `他 ${group.hiddenCount} 件は省略されています`));
             }
             section.append(groupHeader, cards);
             groups.append(section);

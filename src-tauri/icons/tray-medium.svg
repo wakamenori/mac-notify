@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">
+  <!-- 吹き出し / Speech bubble -->
+  <path d="M6 8 C6 6 8 4 10 4 L34 4 C36 4 38 6 38 8 L38 26 C38 28 36 30 34 30 L18 30 L12 38 L12 30 L10 30 C8 30 6 28 6 26 Z" fill="#f59e0b"/>
+  <!-- Three dots -->
+  <circle cx="16" cy="17" r="2.5" fill="#ffffff"/>
+  <circle cx="22" cy="17" r="2.5" fill="#ffffff"/>
+  <circle cx="28" cy="17" r="2.5" fill="#ffffff"/>
+</svg>
