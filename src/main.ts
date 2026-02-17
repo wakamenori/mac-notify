@@ -114,7 +114,7 @@ function create<K extends keyof HTMLElementTagNameMap>(
 }
 
 function urgencyBadgeStyle(color: string): string {
-  return `background:${color}`;
+  return `background:${color};box-shadow:0 0 10px ${color}44`;
 }
 
 function render(): void {
@@ -183,8 +183,10 @@ function render(): void {
       );
     }
 
+    let groupIdx = 0;
     for (const group of state.groups) {
       const section = create("section", "group");
+      section.style.animationDelay = `${groupIdx * 0.06}s`;
       const groupHeader = create("div", "group-header");
       const groupTitle = create(
         "h2",
@@ -241,8 +243,12 @@ function render(): void {
       groupHeader.append(groupTitle, groupActions);
 
       const cards = create("div", "cards");
+      let cardIdx = 0;
       for (const notification of group.notifications) {
-        cards.append(renderCard(notification));
+        const card = renderCard(notification);
+        card.style.animationDelay = `${groupIdx * 0.06 + cardIdx * 0.03}s`;
+        cards.append(card);
+        cardIdx++;
       }
 
       if (group.hiddenCount > 0) {
@@ -257,6 +263,7 @@ function render(): void {
 
       section.append(groupHeader, cards);
       groups.append(section);
+      groupIdx++;
     }
 
     panel.append(header, groups);
@@ -324,6 +331,7 @@ function renderCard(notification: UiNotification): HTMLElement {
 
   const bar = create("div", "card-bar");
   bar.style.background = notification.urgencyColor;
+  bar.style.boxShadow = `0 0 8px ${notification.urgencyColor}40`;
 
   const openBtn = create("button", "card-main");
   openBtn.type = "button";
