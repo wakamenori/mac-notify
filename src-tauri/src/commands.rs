@@ -94,17 +94,6 @@ pub fn inject_dummy_notifications(
 }
 
 #[tauri::command]
-pub fn summarize_notifications(state: State<'_, SharedOrchestrator>) -> Result<String, String> {
-    let guard = state
-        .0
-        .lock()
-        .map_err(|err| format!("state lock error: {err}"))?;
-    guard
-        .summarize_collected()
-        .ok_or_else(|| "収集済み通知はありません。".to_string())
-}
-
-#[tauri::command]
 pub fn get_app_prompts(
     state: State<'_, SharedOrchestrator>,
 ) -> Result<Vec<AppPromptEntry>, String> {

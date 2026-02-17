@@ -29,12 +29,6 @@ pub struct NotificationAnalysis {
     pub reason: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct NotificationSummary {
-    pub text: String,
-    pub notification_count: usize,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum UrgencyLevel {

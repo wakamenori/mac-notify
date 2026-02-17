@@ -136,17 +136,6 @@ function render(): void {
       void loadGroups();
     });
 
-    const summarizeBtn = create("button", "btn secondary", "要約");
-    summarizeBtn.addEventListener("click", async () => {
-      try {
-        const summary = await invokeCommand<string>("summarize_notifications");
-        window.alert(summary);
-      } catch (error) {
-        state.error = (error as Error).message;
-        render();
-      }
-    });
-
     const dummyBtn = create("button", "btn secondary", "ダミー投入");
     dummyBtn.addEventListener("click", async () => {
       await injectDummy();
@@ -164,7 +153,7 @@ function render(): void {
       render();
     });
 
-    actions.append(refreshBtn, summarizeBtn, dummyBtn, clearAllBtn);
+    actions.append(refreshBtn, dummyBtn, clearAllBtn);
   }
 
   const settingsBtn = create(

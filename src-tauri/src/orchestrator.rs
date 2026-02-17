@@ -9,12 +9,12 @@ use log::{error, warn};
 use crate::db::{get_notification_db_path, NotificationDb};
 use crate::focus::{get_focus_assertions_path, FocusModeDetector};
 use crate::gemini::{
-    build_analysis_prompt, build_summary_prompt, fallback_analysis, fallback_summary,
-    parse_analysis_response, AppPrompts, GeminiClient, IgnoredApps,
+    build_analysis_prompt, fallback_analysis, parse_analysis_response, AppPrompts, GeminiClient,
+    IgnoredApps,
 };
 use crate::models::{
-    AnalyzedNotification, FocusState, Notification, NotificationAnalysis, NotificationSummary,
-    UiNotification, UiNotificationGroup, UrgencyLevel,
+    AnalyzedNotification, FocusState, Notification, NotificationAnalysis, UiNotification,
+    UiNotificationGroup, UrgencyLevel,
 };
 use crate::{show_dialog, show_notification};
 
@@ -139,43 +139,11 @@ impl NotifyOrchestrator {
     }
 
     fn on_focus_ended(&mut self) {
-        let summary = self.summarize(&self.collected);
+        let count = self.collected.len();
         show_notification(
             "集中モード終了",
-            &format!("{}件の通知があります", summary.notification_count),
+            &format!("{count}件の通知があります"),
         );
-        show_dialog("通知まとめ", &summary.text);
-    }
-
-    pub fn summarize_collected(&self) -> Option<String> {
-        if self.collected.is_empty() {
-            return None;
-        }
-        Some(self.summarize(&self.collected).text)
-    }
-
-    fn summarize(&self, notifications: &[AnalyzedNotification]) -> NotificationSummary {
-        if notifications.is_empty() {
-            return NotificationSummary {
-                text: "通知はありません。".to_string(),
-                notification_count: 0,
-            };
-        }
-
-        if self.gemini.can_use() {
-            let prompt = build_summary_prompt(notifications, &self.app_prompts);
-            if let Ok(text) = self.gemini.generate_text(&prompt) {
-                return NotificationSummary {
-                    text,
-                    notification_count: notifications.len(),
-                };
-            }
-        }
-
-        NotificationSummary {
-            text: fallback_summary(notifications),
-            notification_count: notifications.len(),
-        }
     }
 
     pub fn notification_groups(&self) -> Vec<UiNotificationGroup> {

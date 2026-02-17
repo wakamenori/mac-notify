@@ -9,7 +9,7 @@ use reqwest::blocking::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::models::{AnalyzedNotification, Notification, NotificationAnalysis, UrgencyLevel};
+use crate::models::{Notification, NotificationAnalysis, UrgencyLevel};
 
 #[derive(Debug, Deserialize)]
 pub struct AppPromptConfig {
@@ -300,70 +300,3 @@ pub fn default_summary_line(notification: &Notification) -> String {
     chars
 }
 
-pub fn build_summary_prompt(
-    notifications: &[AnalyzedNotification],
-    app_prompts: &AppPrompts,
-) -> String {
-    let body = notifications
-        .iter()
-        .map(|n| {
-            format!(
-                "[{}][{}] {}: {}",
-                n.app_name,
-                n.urgency.label(),
-                n.summary_line,
-                n.body
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let mut prompt = format!(
-        "以下の通知を日本語で簡潔に要約してください。\\n\
-アプリごとに整理し、対応順が分かる形にしてください。\\n\\n{}",
-        body
-    );
-
-    // Collect unique bundle_ids that have app context
-    let mut contexts: Vec<String> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for n in notifications {
-        if seen.insert(&n.bundle_id) {
-            if let Some(ctx) = app_prompts.get(&n.bundle_id) {
-                contexts.push(format!("- {}: {ctx}", n.app_name));
-            }
-        }
-    }
-
-    if !contexts.is_empty() {
-        prompt.push_str("\\n\\nアプリごとの追加コンテキスト:\\n");
-        prompt.push_str(&contexts.join("\\n"));
-    }
-
-    prompt
-}
-
-pub fn fallback_summary(notifications: &[AnalyzedNotification]) -> String {
-    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    let mut critical = 0;
-
-    for n in notifications {
-        *counts.entry(n.app_name.clone()).or_default() += 1;
-        if n.urgency == UrgencyLevel::Critical {
-            critical += 1;
-        }
-    }
-
-    let details = counts
-        .into_iter()
-        .map(|(app, count)| format!("{app}: {count}件"))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    format!(
-        "通知 {}件 (R4: {}件)\\n{}",
-        notifications.len(),
-        critical,
-        details
-    )
-}

@@ -21,7 +21,7 @@ use tauri::{
 use commands::{
     add_ignored_app, clear_all_notifications, clear_app_notifications, clear_notification,
     delete_app_prompt, get_app_prompts, get_ignored_apps, get_notification_groups,
-    inject_dummy_notifications, remove_ignored_app, set_app_prompt, summarize_notifications,
+    inject_dummy_notifications, remove_ignored_app, set_app_prompt,
 };
 use orchestrator::{NotifyOrchestrator, SharedOrchestrator, POLL_INTERVAL_SECONDS};
 
@@ -163,29 +163,15 @@ fn handle_tray_menu_event(app: &AppHandle, id: &str) {
                 show_notification("通知クリア", &format!("{}件を削除しました", cleared.0));
             }
         }
-        "summarize" => {
-            let state = app.state::<SharedOrchestrator>();
-            let summary = state
-                .0
-                .lock()
-                .ok()
-                .and_then(|guard| guard.summarize_collected());
-            match summary {
-                Some(text) => show_dialog("通知まとめ", &text),
-                None => show_notification("通知なし", "収集済みの通知はありません。"),
-            }
-        }
         _ => {}
     }
 }
 
 fn tray() -> SystemTray {
-    let summarize_item = CustomMenuItem::new("summarize".to_string(), "通知を要約");
     let clear_item = CustomMenuItem::new("clear_all".to_string(), "全通知をクリア");
     let quit_item = CustomMenuItem::new("quit".to_string(), "終了");
 
     let menu = SystemTrayMenu::new()
-        .add_item(summarize_item)
         .add_item(clear_item)
         .add_native_item(SystemTrayMenuItem::Separator)
         .add_item(quit_item);
@@ -217,7 +203,7 @@ fn main() {
             clear_app_notifications,
             clear_all_notifications,
             inject_dummy_notifications,
-            summarize_notifications,
+
             get_app_prompts,
             set_app_prompt,
             delete_app_prompt,
