@@ -17,7 +17,7 @@ use crate::models::{
     AnalyzedNotification, FocusState, Notification, NotificationAnalysis, UiNotification,
     UiNotificationGroup, UrgencyLevel,
 };
-use crate::{show_dialog, show_notification};
+use crate::show_notification;
 
 pub const POLL_INTERVAL_SECONDS: u64 = 5;
 pub const MAX_DUMMY_INSERT_COUNT: usize = 30;
@@ -25,10 +25,17 @@ pub const MAX_DUMMY_INSERT_COUNT: usize = 30;
 #[derive(Clone)]
 pub struct SharedOrchestrator(pub Arc<Mutex<NotifyOrchestrator>>);
 
+/// Data returned from the fast Phase 1 (DB read) of the polling cycle.
+pub struct PollReadResult {
+    /// Notifications that need LLM analysis (filtered, with app_context attached).
+    pub pending: Vec<(Notification, Option<String>)>,
+    /// Whether focus mode just ended and we should notify the user.
+    pub focus_ended: bool,
+}
+
 pub struct NotifyOrchestrator {
     reader: NotificationDb,
     focus_detector: FocusModeDetector,
-    llm: LlmClient,
     app_prompts: AppPrompts,
     ignored_apps: IgnoredApps,
     last_rowid: i64,
@@ -53,7 +60,6 @@ impl NotifyOrchestrator {
         Ok(Self {
             reader,
             focus_detector: FocusModeDetector::new(assertions_path),
-            llm: LlmClient::new(),
             app_prompts,
             ignored_apps,
             last_rowid: initial_rowid,
@@ -62,9 +68,11 @@ impl NotifyOrchestrator {
         })
     }
 
-    pub fn poll(&mut self) -> bool {
+    /// Phase 1: Read new notifications from DB and determine focus state.
+    /// This is fast (milliseconds) and safe to call while holding the Mutex.
+    pub fn poll_read_new(&mut self) -> PollReadResult {
         let is_focused = self.focus_detector.get_state() == FocusState::Active;
-        let mut changed = false;
+        let mut pending = Vec::new();
 
         match self.reader.read_new(self.last_rowid) {
             Ok(new_notifications) => {
@@ -72,7 +80,16 @@ impl NotifyOrchestrator {
                     self.last_rowid = last.rowid;
                 }
                 if is_focused {
-                    changed = self.handle_new_notifications(new_notifications) || changed;
+                    for notification in new_notifications {
+                        if self.ignored_apps.contains(&notification.bundle_id) {
+                            continue;
+                        }
+                        let app_context = self
+                            .app_prompts
+                            .get(&notification.bundle_id)
+                            .map(|s| s.to_string());
+                        pending.push((notification, app_context));
+                    }
                 }
             }
             Err(err) => {
@@ -80,81 +97,27 @@ impl NotifyOrchestrator {
             }
         }
 
-        if !is_focused && self.was_focused && !self.collected.is_empty() {
-            self.on_focus_ended();
-            changed = true;
-        }
-
+        let focus_ended = !is_focused && self.was_focused && !self.collected.is_empty();
         self.was_focused = is_focused;
-        changed
+
+        PollReadResult {
+            pending,
+            focus_ended,
+        }
     }
 
-    fn handle_new_notifications(&mut self, notifications: Vec<Notification>) -> bool {
-        let mut changed = false;
-
-        for notification in notifications {
-            if self.ignored_apps.contains(&notification.bundle_id) {
-                continue;
-            }
-            let analysis = self.analyze_notification(&notification);
-            if analysis.urgency == UrgencyLevel::Critical {
-                let result = show_dialog(
-                    "緊急通知",
-                    &format!("{}\n{}", notification.title, notification.body),
-                );
-                if result.as_deref() == Some("open_app") {
-                    if let Err(err) = std::process::Command::new("open")
-                        .arg("-b")
-                        .arg(&notification.bundle_id)
-                        .spawn()
-                    {
-                        warn!("failed to open app {}: {err}", notification.bundle_id);
-                    }
-                }
-            }
-
-            self.collected.push(AnalyzedNotification {
-                id: notification.rowid,
-                title: notification.title,
-                body: notification.body,
-                subtitle: notification.subtitle,
-                bundle_id: notification.bundle_id.clone(),
-                app_name: app_name_from_bundle(&notification.bundle_id),
-                urgency: analysis.urgency,
-                summary_line: analysis.summary_line,
-                reason: analysis.reason,
-                timestamp: notification.timestamp,
-            });
-            changed = true;
+    /// Phase 3: Store analyzed results back into the orchestrator.
+    /// This is fast (milliseconds) and safe to call while holding the Mutex.
+    /// Returns true if collected notifications changed.
+    pub fn poll_store_results(&mut self, results: Vec<AnalyzedNotification>) -> bool {
+        if results.is_empty() {
+            return false;
         }
-
-        changed
+        self.collected.extend(results);
+        true
     }
 
-    fn analyze_notification(&self, notification: &Notification) -> NotificationAnalysis {
-        if !self.llm.can_use() {
-            warn!("Ollama is not running at {OLLAMA_BASE_URL}");
-            return NotificationAnalysis {
-                urgency: UrgencyLevel::Medium,
-                summary_line: crate::llm::default_summary_line(notification),
-                reason: "Ollamaが起動していないため分析できませんでした。`ollama serve` を実行してください。".to_string(),
-            };
-        }
-
-        let app_context = self.app_prompts.get(&notification.bundle_id);
-        let prompt = build_analysis_prompt(notification, app_context);
-        match self.llm.generate_text(&prompt) {
-            Ok(text) => match parse_analysis_response(&text, notification) {
-                Some(parsed) => return parsed,
-                None => warn!("analysis response parse failed for {}", notification.rowid),
-            },
-            Err(err) => warn!("notification analysis failed: {err:#}"),
-        }
-
-        fallback_analysis(notification)
-    }
-
-    fn on_focus_ended(&mut self) {
+    pub fn on_focus_ended(&mut self) {
         let count = self.collected.len();
         show_notification("集中モード終了", &format!("{count}件の通知があります"));
     }
@@ -356,6 +319,67 @@ impl NotifyOrchestrator {
 
         count
     }
+}
+
+/// Phase 2: Analyze notifications using the LLM. Runs outside the Mutex.
+/// Returns analyzed notifications and a list of critical ones (for dialog display).
+pub fn analyze_notifications_batch(
+    llm: &LlmClient,
+    pending: Vec<(Notification, Option<String>)>,
+) -> (Vec<AnalyzedNotification>, Vec<AnalyzedNotification>) {
+    let mut results = Vec::new();
+    let mut criticals = Vec::new();
+
+    for (notification, app_context) in pending {
+        let analysis = analyze_single(llm, &notification, app_context.as_deref());
+
+        let analyzed = AnalyzedNotification {
+            id: notification.rowid,
+            title: notification.title,
+            body: notification.body,
+            subtitle: notification.subtitle,
+            bundle_id: notification.bundle_id.clone(),
+            app_name: app_name_from_bundle(&notification.bundle_id),
+            urgency: analysis.urgency,
+            summary_line: analysis.summary_line,
+            reason: analysis.reason,
+            timestamp: notification.timestamp,
+        };
+
+        if analysis.urgency == UrgencyLevel::Critical {
+            criticals.push(analyzed.clone());
+        }
+        results.push(analyzed);
+    }
+
+    (results, criticals)
+}
+
+fn analyze_single(
+    llm: &LlmClient,
+    notification: &Notification,
+    app_context: Option<&str>,
+) -> NotificationAnalysis {
+    if !llm.can_use() {
+        warn!("Ollama is not running at {OLLAMA_BASE_URL}");
+        return NotificationAnalysis {
+            urgency: UrgencyLevel::Medium,
+            summary_line: crate::llm::default_summary_line(notification),
+            reason: "Ollamaが起動していないため分析できませんでした。`ollama serve` を実行してください。"
+                .to_string(),
+        };
+    }
+
+    let prompt = build_analysis_prompt(notification, app_context);
+    match llm.generate_text(&prompt) {
+        Ok(text) => match parse_analysis_response(&text, notification) {
+            Some(parsed) => return parsed,
+            None => warn!("analysis response parse failed for {}", notification.rowid),
+        },
+        Err(err) => warn!("notification analysis failed: {err:#}"),
+    }
+
+    fallback_analysis(notification)
 }
 
 pub fn app_name_from_bundle(bundle_id: &str) -> String {

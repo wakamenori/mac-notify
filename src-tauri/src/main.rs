@@ -24,7 +24,10 @@ use commands::{
     delete_app_prompt, get_app_prompts, get_ignored_apps, get_notification_groups,
     inject_dummy_notifications, open_app, remove_ignored_app, set_app_prompt,
 };
-use orchestrator::{NotifyOrchestrator, SharedOrchestrator, POLL_INTERVAL_SECONDS};
+use llm::LlmClient;
+use orchestrator::{
+    analyze_notifications_batch, NotifyOrchestrator, SharedOrchestrator, POLL_INTERVAL_SECONDS,
+};
 
 pub(crate) fn show_notification(title: &str, message: &str) {
     let escaped_title = escape_applescript(title);
@@ -157,9 +160,14 @@ fn toggle_main_window(app: &AppHandle) {
     }
 }
 
-fn start_polling_thread(app: AppHandle, orchestrator: Arc<Mutex<NotifyOrchestrator>>) {
+fn start_polling_thread(
+    app: AppHandle,
+    orchestrator: Arc<Mutex<NotifyOrchestrator>>,
+    llm: Arc<LlmClient>,
+) {
     thread::spawn(move || loop {
-        let result = {
+        // Phase 1: Lock → DB read + filter → Unlock (fast, sub-millisecond)
+        let poll_result = {
             let mut guard = match orchestrator.lock() {
                 Ok(guard) => guard,
                 Err(err) => {
@@ -168,16 +176,56 @@ fn start_polling_thread(app: AppHandle, orchestrator: Arc<Mutex<NotifyOrchestrat
                     continue;
                 }
             };
-            let changed = guard.poll();
-            if changed {
+            guard.poll_read_new()
+        };
+
+        // Phase 2: LLM analysis (NO lock held, may take seconds/minutes)
+        let (analyzed, criticals) = if poll_result.pending.is_empty() {
+            (Vec::new(), Vec::new())
+        } else {
+            analyze_notifications_batch(&llm, poll_result.pending)
+        };
+
+        // Phase 3: Lock → store results → Unlock (fast)
+        let counts = {
+            let mut guard = match orchestrator.lock() {
+                Ok(guard) => guard,
+                Err(err) => {
+                    error!("Orchestrator lock poisoned: {err}");
+                    thread::sleep(Duration::from_secs(POLL_INTERVAL_SECONDS));
+                    continue;
+                }
+            };
+            let changed = guard.poll_store_results(analyzed);
+            if poll_result.focus_ended {
+                guard.on_focus_ended();
+            }
+            if changed || poll_result.focus_ended {
                 Some(guard.urgency_counts())
             } else {
                 None
             }
         };
 
-        if let Some(counts) = result {
+        if let Some(counts) = counts {
             emit_notifications_updated(&app, counts);
+        }
+
+        // Phase 4: Show critical dialogs (NO lock held, may block on user input)
+        for critical in &criticals {
+            let result = show_dialog(
+                "緊急通知",
+                &format!("{}\n{}", critical.title, critical.body),
+            );
+            if result.as_deref() == Some("open_app") {
+                if let Err(err) = std::process::Command::new("open")
+                    .arg("-b")
+                    .arg(&critical.bundle_id)
+                    .spawn()
+                {
+                    warn!("failed to open app {}: {err}", critical.bundle_id);
+                }
+            }
         }
 
         thread::sleep(Duration::from_secs(POLL_INTERVAL_SECONDS));
@@ -243,6 +291,8 @@ fn main() {
     dotenvy::dotenv().ok();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
+    let llm = Arc::new(LlmClient::new());
+
     let orchestrator = match NotifyOrchestrator::new() {
         Ok(orchestrator) => Arc::new(Mutex::new(orchestrator)),
         Err(err) => {
@@ -274,7 +324,7 @@ fn main() {
                 }
             }
         })
-        .setup(|app| {
+        .setup(move |app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
@@ -286,7 +336,7 @@ fn main() {
                 let _ = window.set_always_on_top(true);
             }
             let orchestrator = app.state::<SharedOrchestrator>().0.clone();
-            start_polling_thread(app.handle().clone(), orchestrator);
+            start_polling_thread(app.handle().clone(), orchestrator, llm.clone());
             Ok(())
         })
         .run(tauri::generate_context!())
