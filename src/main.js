@@ -39,6 +39,22 @@ function create(tagName, className, text) {
 function urgencyBadgeStyle(color) {
     return `background:${color};box-shadow:0 0 10px ${color}44`;
 }
+function formatRelativeTime(timestamp) {
+    const seconds = Math.floor(Date.now() / 1000) - timestamp;
+    if (seconds < 60)
+        return "たった今";
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60)
+        return `${minutes}分前`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24)
+        return `${hours}時間前`;
+    const days = Math.floor(hours / 24);
+    if (days < 7)
+        return `${days}日前`;
+    const weeks = Math.floor(days / 7);
+    return `${weeks}週間前`;
+}
 function render() {
     root.replaceChildren();
     const panel = create("main", "panel");
@@ -208,7 +224,18 @@ function renderCard(notification) {
     label.setAttribute("style", urgencyBadgeStyle(notification.urgencyColor));
     const summary = create("p", "card-summary", notification.summaryLine);
     const sub = create("p", "card-sub", `${notification.title || "タイトルなし"} / ${notification.appName}`);
-    openBtn.append(label, summary, sub);
+    const time = create("span", "card-time", formatRelativeTime(notification.timestamp));
+    time.dataset.timestamp = String(notification.timestamp);
+    openBtn.append(label, time, summary, sub);
+    const openAppBtn = create("button", "card-clear");
+    openAppBtn.type = "button";
+    openAppBtn.title = "アプリを開く";
+    openAppBtn.innerHTML =
+        '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2H2v12h12v-4"/><path d="M10 2h4v4"/><path d="M16 0L7 9"/></svg>';
+    openAppBtn.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        await invokeCommand("open_app", { bundleId: notification.bundleId });
+    });
     const clearBtn = create("button", "card-clear", "×");
     clearBtn.type = "button";
     clearBtn.title = "この通知をクリア";
@@ -216,7 +243,7 @@ function renderCard(notification) {
         event.stopPropagation();
         await clearOne(notification.id);
     });
-    card.append(bar, openBtn, clearBtn);
+    card.append(bar, openBtn, openAppBtn, clearBtn);
     return card;
 }
 function renderDialog(notification) {
@@ -248,6 +275,13 @@ function renderDialog(notification) {
         state.selected = null;
         render();
     });
+    const openAppBtn = create("button", "dialog-icon-btn");
+    openAppBtn.innerHTML =
+        '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2H2v12h12v-4"/><path d="M10 2h4v4"/><path d="M16 0L7 9"/></svg>';
+    openAppBtn.title = "アプリを開く";
+    openAppBtn.addEventListener("click", async () => {
+        await invokeCommand("open_app", { bundleId: notification.bundleId });
+    });
     const clearBtn = create("button", "dialog-icon-btn warn");
     clearBtn.innerHTML =
         '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h12M5.33 4V2.67a1.33 1.33 0 0 1 1.34-1.34h2.66a1.33 1.33 0 0 1 1.34 1.34V4M6.67 7.33v4M9.33 7.33v4"/><path d="M3.33 4h9.34l-.67 9.33a1.33 1.33 0 0 1-1.33 1.34H5.33A1.33 1.33 0 0 1 4 13.33L3.33 4z"/></svg>';
@@ -257,7 +291,7 @@ function renderDialog(notification) {
         state.selected = null;
         render();
     });
-    actions.append(closeBtn, clearBtn);
+    actions.append(closeBtn, openAppBtn, clearBtn);
     dialog.append(title, meta, reasonTitle, reason, originalTitle, original, actions);
     overlay.append(dialog);
     return overlay;
@@ -509,4 +543,12 @@ async function setupEventListener() {
 }
 void setupEventListener();
 void loadGroups();
+setInterval(() => {
+    for (const el of document.querySelectorAll(".card-time")) {
+        const ts = Number(el.dataset.timestamp);
+        if (ts) {
+            el.textContent = formatRelativeTime(ts);
+        }
+    }
+}, 30000);
 export {};

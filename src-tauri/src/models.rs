@@ -96,5 +96,4 @@ pub struct UiNotificationGroup {
     pub bundle_id: String,
     pub app_name: String,
     pub notifications: Vec<UiNotification>,
-    pub hidden_count: usize,
 }

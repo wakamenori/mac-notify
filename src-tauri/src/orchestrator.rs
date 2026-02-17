@@ -20,7 +20,6 @@ use crate::models::{
 use crate::{show_dialog, show_notification};
 
 pub const POLL_INTERVAL_SECONDS: u64 = 5;
-pub const MAX_NOTIFICATIONS_PER_APP: usize = 12;
 pub const MAX_DUMMY_INSERT_COUNT: usize = 30;
 
 #[derive(Clone)]
@@ -151,10 +150,7 @@ impl NotifyOrchestrator {
 
     fn on_focus_ended(&mut self) {
         let count = self.collected.len();
-        show_notification(
-            "集中モード終了",
-            &format!("{count}件の通知があります"),
-        );
+        show_notification("集中モード終了", &format!("{count}件の通知があります"));
     }
 
     pub fn notification_groups(&self) -> Vec<UiNotificationGroup> {
@@ -178,26 +174,31 @@ impl NotifyOrchestrator {
             });
         }
 
-        grouped
+        let mut groups: Vec<UiNotificationGroup> = grouped
             .into_iter()
             .map(|(bundle_id, mut notifications)| {
+                // Sort notifications newest first
+                notifications.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
                 let app_name = notifications
                     .first()
                     .map(|n| n.app_name.clone())
                     .unwrap_or_else(|| app_name_from_bundle(&bundle_id));
-                let hidden_count = notifications
-                    .len()
-                    .saturating_sub(MAX_NOTIFICATIONS_PER_APP);
-                notifications.truncate(MAX_NOTIFICATIONS_PER_APP);
-
                 UiNotificationGroup {
                     bundle_id,
                     app_name,
                     notifications,
-                    hidden_count,
                 }
             })
-            .collect()
+            .collect();
+
+        // Sort groups by newest notification first
+        groups.sort_by(|a, b| {
+            let ts_a = a.notifications.first().map(|n| n.timestamp).unwrap_or(0);
+            let ts_b = b.notifications.first().map(|n| n.timestamp).unwrap_or(0);
+            ts_b.cmp(&ts_a)
+        });
+
+        groups
     }
 
     pub fn urgency_counts(&self) -> [usize; 4] {

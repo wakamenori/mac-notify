@@ -41,9 +41,7 @@ impl AppPrompts {
                 {
                     parsed
                 // Fall back to flat format: {"bundleId": "context string"}
-                } else if let Ok(flat) =
-                    serde_json::from_str::<HashMap<String, String>>(&content)
-                {
+                } else if let Ok(flat) = serde_json::from_str::<HashMap<String, String>>(&content) {
                     flat.into_iter()
                         .map(|(k, v)| (k, AppPromptConfig { context: v }))
                         .collect()
@@ -86,12 +84,7 @@ impl AppPrompts {
         let serializable: BTreeMap<&str, serde_json::Value> = self
             .map
             .iter()
-            .map(|(k, v)| {
-                (
-                    k.as_str(),
-                    serde_json::json!({ "context": v.context }),
-                )
-            })
+            .map(|(k, v)| (k.as_str(), serde_json::json!({ "context": v.context })))
             .collect();
         let json = serde_json::to_string_pretty(&serializable)?;
         fs::write(&self.path, json)?;
@@ -314,4 +307,3 @@ pub fn default_summary_line(notification: &Notification) -> String {
     }
     chars
 }
-

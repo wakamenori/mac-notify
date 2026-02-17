@@ -1,9 +1,9 @@
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
+use crate::emit_notifications_updated;
 use crate::models::UiNotificationGroup;
 use crate::orchestrator::{SharedOrchestrator, MAX_DUMMY_INSERT_COUNT};
-use crate::emit_notifications_updated;
 
 #[derive(Serialize)]
 pub struct AppPromptEntry {
