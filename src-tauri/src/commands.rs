@@ -125,6 +125,16 @@ pub fn set_app_prompt(
 }
 
 #[tauri::command]
+pub fn open_app(bundle_id: String) -> Result<(), String> {
+    std::process::Command::new("open")
+        .arg("-b")
+        .arg(&bundle_id)
+        .spawn()
+        .map_err(|err| format!("failed to open app {bundle_id}: {err}"))?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn delete_app_prompt(
     bundle_id: String,
     state: State<'_, SharedOrchestrator>,

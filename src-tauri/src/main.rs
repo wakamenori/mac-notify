@@ -22,7 +22,7 @@ use tauri::{
 use commands::{
     add_ignored_app, clear_all_notifications, clear_app_notifications, clear_notification,
     delete_app_prompt, get_app_prompts, get_ignored_apps, get_notification_groups,
-    inject_dummy_notifications, remove_ignored_app, set_app_prompt,
+    inject_dummy_notifications, open_app, remove_ignored_app, set_app_prompt,
 };
 use orchestrator::{NotifyOrchestrator, SharedOrchestrator, POLL_INTERVAL_SECONDS};
 
@@ -36,14 +36,32 @@ pub(crate) fn show_notification(title: &str, message: &str) {
     run_osascript(&script);
 }
 
-pub(crate) fn show_dialog(title: &str, message: &str) {
+pub(crate) fn show_dialog(title: &str, message: &str) -> Option<String> {
     let escaped_title = escape_applescript(title);
     let escaped_message = escape_applescript(message);
     let script = format!(
-        "display dialog \"{}\" with title \"{}\" buttons {{\"OK\"}} default button \"OK\"",
+        "display dialog \"{}\" with title \"{}\" buttons {{\"OK\", \"アプリを開く\"}} default button \"OK\"",
         escaped_message, escaped_title
     );
-    run_osascript(&script);
+    let result = Command::new("/usr/bin/osascript")
+        .arg("-e")
+        .arg(&script)
+        .output();
+
+    match result {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if stdout.contains("アプリを開く") {
+                Some("open_app".to_string())
+            } else {
+                None
+            }
+        }
+        Err(err) => {
+            warn!("Failed to run osascript: {err}");
+            None
+        }
+    }
 }
 
 fn escape_applescript(text: &str) -> String {
@@ -231,7 +249,8 @@ fn main() {
             delete_app_prompt,
             get_ignored_apps,
             add_ignored_app,
-            remove_ignored_app
+            remove_ignored_app,
+            open_app
         ])
         .on_window_event(|window, event| {
             if window.label() == "main" {

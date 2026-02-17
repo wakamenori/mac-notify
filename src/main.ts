@@ -351,6 +351,16 @@ function renderCard(notification: UiNotification): HTMLElement {
   );
   openBtn.append(label, summary, sub);
 
+  const openAppBtn = create("button", "card-clear");
+  openAppBtn.type = "button";
+  openAppBtn.title = "アプリを開く";
+  openAppBtn.innerHTML =
+    '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2H2v12h12v-4"/><path d="M10 2h4v4"/><path d="M16 0L7 9"/></svg>';
+  openAppBtn.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    await invokeCommand("open_app", { bundleId: notification.bundleId });
+  });
+
   const clearBtn = create("button", "card-clear", "×");
   clearBtn.type = "button";
   clearBtn.title = "この通知をクリア";
@@ -359,7 +369,7 @@ function renderCard(notification: UiNotification): HTMLElement {
     await clearOne(notification.id);
   });
 
-  card.append(bar, openBtn, clearBtn);
+  card.append(bar, openBtn, openAppBtn, clearBtn);
   return card;
 }
 
@@ -402,6 +412,14 @@ function renderDialog(notification: UiNotification): HTMLElement {
     render();
   });
 
+  const openAppBtn = create("button", "dialog-icon-btn");
+  openAppBtn.innerHTML =
+    '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2H2v12h12v-4"/><path d="M10 2h4v4"/><path d="M16 0L7 9"/></svg>';
+  openAppBtn.title = "アプリを開く";
+  openAppBtn.addEventListener("click", async () => {
+    await invokeCommand("open_app", { bundleId: notification.bundleId });
+  });
+
   const clearBtn = create("button", "dialog-icon-btn warn");
   clearBtn.innerHTML =
     '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h12M5.33 4V2.67a1.33 1.33 0 0 1 1.34-1.34h2.66a1.33 1.33 0 0 1 1.34 1.34V4M6.67 7.33v4M9.33 7.33v4"/><path d="M3.33 4h9.34l-.67 9.33a1.33 1.33 0 0 1-1.33 1.34H5.33A1.33 1.33 0 0 1 4 13.33L3.33 4z"/></svg>';
@@ -412,7 +430,7 @@ function renderDialog(notification: UiNotification): HTMLElement {
     render();
   });
 
-  actions.append(closeBtn, clearBtn);
+  actions.append(closeBtn, openAppBtn, clearBtn);
   dialog.append(title, meta, reasonTitle, reason, originalTitle, original, actions);
   overlay.append(dialog);
   return overlay;

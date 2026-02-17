@@ -99,10 +99,19 @@ impl NotifyOrchestrator {
             }
             let analysis = self.analyze_notification(&notification);
             if analysis.urgency == UrgencyLevel::Critical {
-                show_dialog(
+                let result = show_dialog(
                     "緊急通知",
                     &format!("{}\n{}", notification.title, notification.body),
                 );
+                if result.as_deref() == Some("open_app") {
+                    if let Err(err) = std::process::Command::new("open")
+                        .arg("-b")
+                        .arg(&notification.bundle_id)
+                        .spawn()
+                    {
+                        warn!("failed to open app {}: {err}", notification.bundle_id);
+                    }
+                }
             }
 
             self.collected.push(AnalyzedNotification {
