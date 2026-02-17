@@ -306,11 +306,20 @@
         font-weight: 500;
       }
 
-      .card-clear {
+      .card-actions {
         position: absolute;
         top: 6px;
         right: 6px;
         display: none;
+        gap: 4px;
+      }
+
+      .card:hover .card-actions {
+        display: flex;
+      }
+
+      .card-clear {
+        display: flex;
         align-items: center;
         justify-content: center;
         border: none;
@@ -323,10 +332,6 @@
         line-height: 1;
         cursor: pointer;
         transition: all 0.12s ease;
-      }
-
-      .card:hover .card-clear {
-        display: flex;
       }
 
       .card-clear:hover {

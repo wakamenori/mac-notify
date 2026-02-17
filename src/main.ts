@@ -375,7 +375,10 @@ function renderCard(notification: UiNotification): HTMLElement {
     await clearOne(notification.id);
   });
 
-  card.append(bar, openBtn, openAppBtn, clearBtn);
+  const cardActions = create("div", "card-actions");
+  cardActions.append(openAppBtn, clearBtn);
+
+  card.append(bar, openBtn, cardActions);
   return card;
 }
 
