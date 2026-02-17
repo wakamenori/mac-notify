@@ -14,8 +14,9 @@ use std::time::Duration;
 
 use log::{error, warn};
 use tauri::{
-    AppHandle, CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu,
-    SystemTrayMenuItem, WindowEvent,
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Emitter, Manager, WindowEvent,
 };
 
 use commands::{
@@ -60,6 +61,8 @@ fn run_osascript(script: &str) {
     }
 }
 
+struct TrayState(tauri::tray::TrayIcon);
+
 fn update_tray_title(app: &AppHandle, counts: [usize; 4]) {
     let labels = ["R4", "R3", "R2", "R1"];
     let parts: Vec<String> = counts
@@ -68,22 +71,28 @@ fn update_tray_title(app: &AppHandle, counts: [usize; 4]) {
         .filter(|(c, _)| **c > 0)
         .map(|(c, l)| format!("{l}:{c}"))
         .collect();
-    let title = parts.join(" ");
+    let title = if parts.is_empty() {
+        String::new()
+    } else {
+        parts.join(" ")
+    };
     #[cfg(target_os = "macos")]
-    if let Err(err) = app.tray_handle().set_title(&title) {
-        warn!("failed to update tray title: {err}");
+    if let Some(state) = app.try_state::<TrayState>() {
+        if let Err(err) = state.0.set_title(Some(&title)) {
+            warn!("failed to update tray title: {err}");
+        }
     }
 }
 
 pub(crate) fn emit_notifications_updated(app: &AppHandle, counts: [usize; 4]) {
-    if let Err(err) = app.emit_all("notifications-updated", ()) {
+    if let Err(err) = app.emit("notifications-updated", ()) {
         warn!("failed to emit notifications-updated: {err}");
     }
     update_tray_title(app, counts);
 }
 
 fn toggle_main_window(app: &AppHandle) {
-    let Some(window) = app.get_window("main") else {
+    let Some(window) = app.get_webview_window("main") else {
         warn!("main window not found");
         return;
     };
@@ -167,20 +176,34 @@ fn handle_tray_menu_event(app: &AppHandle, id: &str) {
     }
 }
 
-fn tray() -> SystemTray {
-    let clear_item = CustomMenuItem::new("clear_all".to_string(), "全通知をクリア");
-    let quit_item = CustomMenuItem::new("quit".to_string(), "終了");
+fn setup_tray(app: &tauri::App) -> Result<tauri::tray::TrayIcon, Box<dyn std::error::Error>> {
+    let clear_item = MenuItem::with_id(app, "clear_all", "全通知をクリア", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let quit_item = MenuItem::with_id(app, "quit", "終了", true, None::<&str>)?;
 
-    let menu = SystemTrayMenu::new()
-        .add_item(clear_item)
-        .add_native_item(SystemTrayMenuItem::Separator)
-        .add_item(quit_item);
+    let menu = Menu::with_items(app, &[&clear_item, &separator, &quit_item])?;
 
-    let tray = SystemTray::new().with_menu(menu);
-    #[cfg(target_os = "macos")]
-    let tray = tray.with_menu_on_left_click(false);
+    let tray = TrayIconBuilder::new()
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .icon(tauri::include_image!("icons/tray.png"))
+        .icon_as_template(true)
+        .on_menu_event(|app, event| {
+            handle_tray_menu_event(app, event.id().as_ref());
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                toggle_main_window(tray.app_handle());
+            }
+        })
+        .build(app)?;
 
-    tray
+    Ok(tray)
 }
 
 fn main() {
@@ -203,7 +226,6 @@ fn main() {
             clear_app_notifications,
             clear_all_notifications,
             inject_dummy_notifications,
-
             get_app_prompts,
             set_app_prompt,
             delete_app_prompt,
@@ -211,29 +233,26 @@ fn main() {
             add_ignored_app,
             remove_ignored_app
         ])
-        .system_tray(tray())
-        .on_window_event(|event| {
-            if event.window().label() == "main" {
-                if let WindowEvent::Focused(false) = event.event() {
-                    let _ = event.window().hide();
+        .on_window_event(|window, event| {
+            if window.label() == "main" {
+                if let WindowEvent::Focused(false) = event {
+                    let _ = window.hide();
                 }
             }
-        })
-        .on_system_tray_event(|app, event| match event {
-            SystemTrayEvent::LeftClick { .. } => toggle_main_window(app),
-            SystemTrayEvent::MenuItemClick { id, .. } => handle_tray_menu_event(app, &id),
-            _ => {}
         })
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            if let Some(window) = app.get_window("main") {
+            let tray = setup_tray(app)?;
+            app.manage(TrayState(tray));
+
+            if let Some(window) = app.get_webview_window("main") {
                 let _ = window.hide();
                 let _ = window.set_always_on_top(true);
             }
             let orchestrator = app.state::<SharedOrchestrator>().0.clone();
-            start_polling_thread(app.handle(), orchestrator);
+            start_polling_thread(app.handle().clone(), orchestrator);
             Ok(())
         })
         .run(tauri::generate_context!())
