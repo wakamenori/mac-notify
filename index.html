@@ -109,6 +109,11 @@
         font-weight: 650;
       }
 
+      .group-actions {
+        display: flex;
+        gap: 4px;
+      }
+
       .group-clear-btn {
         border: none;
         background: transparent;
@@ -311,6 +316,31 @@
       .dialog-icon-btn.warn:hover {
         background: #fee2e2;
         color: #b91c1c;
+      }
+
+      .prompt-input,
+      .prompt-textarea {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-size: 13px;
+        font-family: inherit;
+        background: #ffffff;
+        color: var(--ink-1);
+        resize: vertical;
+      }
+
+      .prompt-input:focus,
+      .prompt-textarea:focus {
+        outline: none;
+        border-color: #93c5fd;
+        box-shadow: 0 0 0 2px rgba(147, 197, 253, 0.3);
+      }
+
+      .prompt-input:disabled {
+        background: #f1f5f9;
+        color: var(--ink-2);
       }
 
       @media (max-width: 640px) {

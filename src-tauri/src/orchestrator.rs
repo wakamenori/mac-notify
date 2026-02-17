@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::env;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -9,7 +10,7 @@ use crate::db::{get_notification_db_path, NotificationDb};
 use crate::focus::{get_focus_assertions_path, FocusModeDetector};
 use crate::gemini::{
     build_analysis_prompt, build_summary_prompt, fallback_analysis, fallback_summary,
-    parse_analysis_response, GeminiClient,
+    parse_analysis_response, AppPrompts, GeminiClient, IgnoredApps,
 };
 use crate::models::{
     AnalyzedNotification, FocusState, Notification, NotificationAnalysis, NotificationSummary,
@@ -28,6 +29,8 @@ pub struct NotifyOrchestrator {
     reader: NotificationDb,
     focus_detector: FocusModeDetector,
     gemini: GeminiClient,
+    app_prompts: AppPrompts,
+    ignored_apps: IgnoredApps,
     last_rowid: i64,
     collected: Vec<AnalyzedNotification>,
     was_focused: bool,
@@ -41,10 +44,19 @@ impl NotifyOrchestrator {
         let mut reader = NotificationDb::new(db_path);
         let initial_rowid = reader.latest_rowid()?;
 
+        let config_dir = env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default()
+            .join(".config/mac-notify");
+        let app_prompts = AppPrompts::load(&config_dir.join("app_prompts.json"));
+        let ignored_apps = IgnoredApps::load(&config_dir.join("ignored_apps.json"));
+
         Ok(Self {
             reader,
             focus_detector: FocusModeDetector::new(assertions_path),
             gemini: GeminiClient::new(google_api_key),
+            app_prompts,
+            ignored_apps,
             last_rowid: initial_rowid,
             collected: Vec::new(),
             was_focused: false,
@@ -82,6 +94,9 @@ impl NotifyOrchestrator {
         let mut changed = false;
 
         for notification in notifications {
+            if self.ignored_apps.contains(&notification.bundle_id) {
+                continue;
+            }
             let analysis = self.analyze_notification(&notification);
             if analysis.urgency == UrgencyLevel::Critical {
                 show_dialog(
@@ -109,7 +124,8 @@ impl NotifyOrchestrator {
 
     fn analyze_notification(&self, notification: &Notification) -> NotificationAnalysis {
         if self.gemini.can_use() {
-            let prompt = build_analysis_prompt(notification);
+            let app_context = self.app_prompts.get(&notification.bundle_id);
+            let prompt = build_analysis_prompt(notification, app_context);
             match self.gemini.generate_text(&prompt) {
                 Ok(text) => match parse_analysis_response(&text, notification) {
                     Some(parsed) => return parsed,
@@ -147,7 +163,7 @@ impl NotifyOrchestrator {
         }
 
         if self.gemini.can_use() {
-            let prompt = build_summary_prompt(notifications);
+            let prompt = build_summary_prompt(notifications, &self.app_prompts);
             if let Ok(text) = self.gemini.generate_text(&prompt) {
                 return NotificationSummary {
                     text,
@@ -233,6 +249,40 @@ impl NotifyOrchestrator {
         let count = self.collected.len();
         self.collected.clear();
         count
+    }
+
+    pub fn list_app_prompts(&self) -> Vec<(String, String)> {
+        self.app_prompts.list()
+    }
+
+    pub fn set_app_prompt(&mut self, bundle_id: String, context: String) -> Result<()> {
+        self.app_prompts.set(bundle_id, context);
+        self.app_prompts.save()
+    }
+
+    pub fn list_ignored_apps(&self) -> Vec<String> {
+        self.ignored_apps.list()
+    }
+
+    pub fn add_ignored_app(&mut self, bundle_id: String) -> Result<()> {
+        self.ignored_apps.add(bundle_id);
+        self.ignored_apps.save()
+    }
+
+    pub fn remove_ignored_app(&mut self, bundle_id: &str) -> Result<bool> {
+        let removed = self.ignored_apps.remove(bundle_id);
+        if removed {
+            self.ignored_apps.save()?;
+        }
+        Ok(removed)
+    }
+
+    pub fn delete_app_prompt(&mut self, bundle_id: &str) -> Result<bool> {
+        let removed = self.app_prompts.remove(bundle_id);
+        if removed {
+            self.app_prompts.save()?;
+        }
+        Ok(removed)
     }
 
     pub fn inject_dummy_notifications(&mut self, count: usize) -> usize {

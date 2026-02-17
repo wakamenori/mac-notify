@@ -19,8 +19,9 @@ use tauri::{
 };
 
 use commands::{
-    clear_all_notifications, clear_app_notifications, clear_notification,
-    get_notification_groups, inject_dummy_notifications, summarize_notifications,
+    add_ignored_app, clear_all_notifications, clear_app_notifications, clear_notification,
+    delete_app_prompt, get_app_prompts, get_ignored_apps, get_notification_groups,
+    inject_dummy_notifications, remove_ignored_app, set_app_prompt, summarize_notifications,
 };
 use orchestrator::{NotifyOrchestrator, SharedOrchestrator, POLL_INTERVAL_SECONDS};
 
@@ -216,7 +217,13 @@ fn main() {
             clear_app_notifications,
             clear_all_notifications,
             inject_dummy_notifications,
-            summarize_notifications
+            summarize_notifications,
+            get_app_prompts,
+            set_app_prompt,
+            delete_app_prompt,
+            get_ignored_apps,
+            add_ignored_app,
+            remove_ignored_app
         ])
         .system_tray(tray())
         .on_window_event(|event| {

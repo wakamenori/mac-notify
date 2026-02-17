@@ -1,11 +1,150 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{bail, Result};
+use log::warn;
 use reqwest::blocking::Client;
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::models::{AnalyzedNotification, Notification, NotificationAnalysis, UrgencyLevel};
+
+#[derive(Debug, Deserialize)]
+pub struct AppPromptConfig {
+    pub context: String,
+}
+
+#[derive(Debug)]
+pub struct AppPrompts {
+    map: HashMap<String, AppPromptConfig>,
+    path: PathBuf,
+}
+
+impl Default for AppPrompts {
+    fn default() -> Self {
+        Self {
+            map: HashMap::new(),
+            path: PathBuf::new(),
+        }
+    }
+}
+
+impl AppPrompts {
+    pub fn load(path: &Path) -> Self {
+        let map = match fs::read_to_string(path) {
+            Ok(content) => match serde_json::from_str::<HashMap<String, AppPromptConfig>>(&content)
+            {
+                Ok(parsed) => parsed,
+                Err(err) => {
+                    warn!("Failed to parse app_prompts.json: {err:#}");
+                    HashMap::new()
+                }
+            },
+            Err(_) => HashMap::new(),
+        };
+        Self {
+            map,
+            path: path.to_path_buf(),
+        }
+    }
+
+    pub fn get(&self, bundle_id: &str) -> Option<&str> {
+        self.map.get(bundle_id).map(|c| c.context.as_str())
+    }
+
+    pub fn list(&self) -> Vec<(String, String)> {
+        self.map
+            .iter()
+            .map(|(k, v)| (k.clone(), v.context.clone()))
+            .collect()
+    }
+
+    pub fn set(&mut self, bundle_id: String, context: String) {
+        self.map.insert(bundle_id, AppPromptConfig { context });
+    }
+
+    pub fn remove(&mut self, bundle_id: &str) -> bool {
+        self.map.remove(bundle_id).is_some()
+    }
+
+    pub fn save(&self) -> Result<()> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let serializable: BTreeMap<&str, &str> = self
+            .map
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.context.as_str()))
+            .collect();
+        let json = serde_json::to_string_pretty(&serializable)?;
+        fs::write(&self.path, json)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct IgnoredApps {
+    set: HashSet<String>,
+    path: PathBuf,
+}
+
+impl Default for IgnoredApps {
+    fn default() -> Self {
+        Self {
+            set: HashSet::new(),
+            path: PathBuf::new(),
+        }
+    }
+}
+
+impl IgnoredApps {
+    pub fn load(path: &Path) -> Self {
+        let set = match fs::read_to_string(path) {
+            Ok(content) => match serde_json::from_str::<Vec<String>>(&content) {
+                Ok(parsed) => parsed.into_iter().collect(),
+                Err(err) => {
+                    warn!("Failed to parse ignored_apps.json: {err:#}");
+                    HashSet::new()
+                }
+            },
+            Err(_) => HashSet::new(),
+        };
+        Self {
+            set,
+            path: path.to_path_buf(),
+        }
+    }
+
+    pub fn contains(&self, bundle_id: &str) -> bool {
+        self.set.contains(bundle_id)
+    }
+
+    pub fn list(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.set.iter().cloned().collect();
+        v.sort();
+        v
+    }
+
+    pub fn add(&mut self, bundle_id: String) {
+        self.set.insert(bundle_id);
+    }
+
+    pub fn remove(&mut self, bundle_id: &str) -> bool {
+        self.set.remove(bundle_id)
+    }
+
+    pub fn save(&self) -> Result<()> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let sorted = self.list();
+        let json = serde_json::to_string_pretty(&sorted)?;
+        fs::write(&self.path, json)?;
+        Ok(())
+    }
+}
 
 const GEMINI_MODEL: &str = "gemini-2.5-flash-lite";
 
@@ -68,8 +207,8 @@ impl GeminiClient {
     }
 }
 
-pub fn build_analysis_prompt(notification: &Notification) -> String {
-    format!(
+pub fn build_analysis_prompt(notification: &Notification, app_context: Option<&str>) -> String {
+    let mut prompt = format!(
         "以下の通知を分析してください。\\n\
 JSONのみで回答し、追加説明は不要です。\\n\
 スキーマ:\\n\
@@ -84,7 +223,13 @@ JSONのみで回答し、追加説明は不要です。\\n\
 サブタイトル: {}\\n\
 本文: {}",
         notification.bundle_id, notification.title, notification.subtitle, notification.body
-    )
+    );
+
+    if let Some(ctx) = app_context {
+        prompt.push_str(&format!("\\n\\nこのアプリに関する追加コンテキスト: {ctx}"));
+    }
+
+    prompt
 }
 
 pub fn parse_analysis_response(
@@ -155,7 +300,10 @@ pub fn default_summary_line(notification: &Notification) -> String {
     chars
 }
 
-pub fn build_summary_prompt(notifications: &[AnalyzedNotification]) -> String {
+pub fn build_summary_prompt(
+    notifications: &[AnalyzedNotification],
+    app_prompts: &AppPrompts,
+) -> String {
     let body = notifications
         .iter()
         .map(|n| {
@@ -170,11 +318,29 @@ pub fn build_summary_prompt(notifications: &[AnalyzedNotification]) -> String {
         .collect::<Vec<_>>()
         .join("\n");
 
-    format!(
+    let mut prompt = format!(
         "以下の通知を日本語で簡潔に要約してください。\\n\
 アプリごとに整理し、対応順が分かる形にしてください。\\n\\n{}",
         body
-    )
+    );
+
+    // Collect unique bundle_ids that have app context
+    let mut contexts: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for n in notifications {
+        if seen.insert(&n.bundle_id) {
+            if let Some(ctx) = app_prompts.get(&n.bundle_id) {
+                contexts.push(format!("- {}: {ctx}", n.app_name));
+            }
+        }
+    }
+
+    if !contexts.is_empty() {
+        prompt.push_str("\\n\\nアプリごとの追加コンテキスト:\\n");
+        prompt.push_str(&contexts.join("\\n"));
+    }
+
+    prompt
 }
 
 pub fn fallback_summary(notifications: &[AnalyzedNotification]) -> String {
