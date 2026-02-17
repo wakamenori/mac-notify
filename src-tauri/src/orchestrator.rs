@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use log::{error, warn};
@@ -124,6 +125,7 @@ impl NotifyOrchestrator {
                 urgency: analysis.urgency,
                 summary_line: analysis.summary_line,
                 reason: analysis.reason,
+                timestamp: notification.timestamp,
             });
             changed = true;
         }
@@ -172,6 +174,7 @@ impl NotifyOrchestrator {
                 urgency_color: item.urgency.color().to_string(),
                 summary_line: item.summary_line.clone(),
                 reason: item.reason.clone(),
+                timestamp: item.timestamp,
             });
         }
 
@@ -316,10 +319,19 @@ impl NotifyOrchestrator {
             .min()
             .unwrap_or(0);
 
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        // Offsets in seconds to simulate various elapsed times
+        const OFFSETS: [i64; 8] = [30, 180, 600, 1800, 3600, 7200, 43200, 86400];
+
         for i in 0..count {
             next_virtual_id -= 1;
             let (bundle_id, app_name) = APPS[i % APPS.len()];
             let (summary_line, body, reason, urgency) = SAMPLES[i % SAMPLES.len()];
+            let offset = OFFSETS[i % OFFSETS.len()];
 
             self.collected.push(AnalyzedNotification {
                 id: next_virtual_id,
@@ -331,6 +343,7 @@ impl NotifyOrchestrator {
                 urgency,
                 summary_line: summary_line.to_string(),
                 reason: reason.to_string(),
+                timestamp: now - offset,
             });
         }
 

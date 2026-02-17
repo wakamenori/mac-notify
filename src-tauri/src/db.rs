@@ -2,6 +2,7 @@ use std::env;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use log::warn;
@@ -51,6 +52,11 @@ impl NotificationDb {
             Ok((rowid, data, bundle_id))
         })?;
 
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
         let mut notifications = Vec::new();
         for row in rows {
             let (rowid, data, bundle_id) = row?;
@@ -62,6 +68,7 @@ impl NotificationDb {
                 body: parsed.body,
                 subtitle: parsed.subtitle,
                 bundle_id,
+                timestamp: now,
             });
         }
 

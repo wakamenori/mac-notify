@@ -17,6 +17,7 @@ type UiNotification = {
   urgencyColor: string;
   summaryLine: string;
   reason: string;
+  timestamp: number;
 };
 
 type UiNotificationGroup = {
@@ -115,6 +116,19 @@ function create<K extends keyof HTMLElementTagNameMap>(
 
 function urgencyBadgeStyle(color: string): string {
   return `background:${color};box-shadow:0 0 10px ${color}44`;
+}
+
+function formatRelativeTime(timestamp: number): string {
+  const seconds = Math.floor(Date.now() / 1000) - timestamp;
+  if (seconds < 60) return "たった今";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}分前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}時間前`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}日前`;
+  const weeks = Math.floor(days / 7);
+  return `${weeks}週間前`;
 }
 
 function render(): void {
@@ -349,7 +363,10 @@ function renderCard(notification: UiNotification): HTMLElement {
     "card-sub",
     `${notification.title || "タイトルなし"} / ${notification.appName}`,
   );
-  openBtn.append(label, summary, sub);
+  const time = create("span", "card-time", formatRelativeTime(notification.timestamp));
+  time.dataset.timestamp = String(notification.timestamp);
+
+  openBtn.append(label, time, summary, sub);
 
   const openAppBtn = create("button", "card-clear");
   openAppBtn.type = "button";
@@ -730,5 +747,14 @@ async function setupEventListener(): Promise<void> {
 
 void setupEventListener();
 void loadGroups();
+
+setInterval(() => {
+  for (const el of document.querySelectorAll<HTMLElement>(".card-time")) {
+    const ts = Number(el.dataset.timestamp);
+    if (ts) {
+      el.textContent = formatRelativeTime(ts);
+    }
+  }
+}, 30_000);
 
 export {};

@@ -7,6 +7,7 @@ pub struct Notification {
     pub body: String,
     pub subtitle: String,
     pub bundle_id: String,
+    pub timestamp: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -20,6 +21,7 @@ pub struct AnalyzedNotification {
     pub urgency: UrgencyLevel,
     pub summary_line: String,
     pub reason: String,
+    pub timestamp: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +87,7 @@ pub struct UiNotification {
     pub urgency_color: String,
     pub summary_line: String,
     pub reason: String,
+    pub timestamp: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
