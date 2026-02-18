@@ -226,7 +226,7 @@ function renderCard(notification) {
     openBtn.append(label, time, summary, sub);
     const openAppBtn = create("button", "card-clear");
     openAppBtn.type = "button";
-    openAppBtn.title = "アプリを開く";
+    openAppBtn.title = `アプリを開く: ${notification.bundleId}`;
     openAppBtn.innerHTML =
         '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2H2v12h12v-4"/><path d="M10 2h4v4"/><path d="M16 0L7 9"/></svg>';
     openAppBtn.addEventListener("click", async (event) => {

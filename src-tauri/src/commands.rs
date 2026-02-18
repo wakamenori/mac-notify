@@ -126,6 +126,7 @@ pub fn set_app_prompt(
 
 #[tauri::command]
 pub fn open_app(bundle_id: String) -> Result<(), String> {
+    log::info!("open_app called with bundle_id: {bundle_id}");
     std::process::Command::new("open")
         .arg("-b")
         .arg(&bundle_id)
