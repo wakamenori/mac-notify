@@ -82,6 +82,61 @@ fn run_osascript(script: &str) {
     }
 }
 
+fn compact_error_text(err: &str, max_chars: usize) -> String {
+    let compact = err
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" / ");
+
+    let mut chars = compact.chars();
+    let truncated: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{truncated}...")
+    } else {
+        compact
+    }
+}
+
+fn show_startup_error_dialog(error_detail: &str) {
+    let detail = compact_error_text(error_detail, 220);
+    let message = format!(
+        "初期化に失敗しました。\\n\\n\
+主な原因: mac-notify.app のフルディスクアクセス未許可\\n\
+対処: システム設定 > プライバシーとセキュリティ > フルディスクアクセスで \
+mac-notify.app を許可後、再起動してください。\\n\\n\
+詳細: {detail}"
+    );
+    let escaped_message = escape_applescript(&message);
+    let script = format!(
+        "display dialog \"{}\" with title \"mac-notify 起動エラー\" \
+buttons {{\"閉じる\", \"設定を開く\"}} default button \"閉じる\" with icon stop",
+        escaped_message
+    );
+
+    match Command::new("/usr/bin/osascript")
+        .arg("-e")
+        .arg(&script)
+        .output()
+    {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if stdout.contains("設定を開く") {
+                if let Err(err) = Command::new("open")
+                    .arg("x-apple.systempreferences:com.apple.preference.security")
+                    .spawn()
+                {
+                    warn!("Failed to open system settings: {err}");
+                }
+            }
+        }
+        Err(err) => {
+            warn!("Failed to show startup error dialog: {err}");
+        }
+    }
+}
+
 struct TrayState(tauri::tray::TrayIcon);
 
 fn highest_urgency_index(counts: [usize; 4]) -> Option<usize> {
@@ -296,6 +351,7 @@ fn main() {
     let orchestrator = match NotifyOrchestrator::new() {
         Ok(orchestrator) => Arc::new(Mutex::new(orchestrator)),
         Err(err) => {
+            show_startup_error_dialog(&format!("{err:#}"));
             eprintln!("failed to initialize mac-notify: {err:#}");
             std::process::exit(1);
         }
