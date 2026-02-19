@@ -164,7 +164,7 @@ fn extract_plist_string(value: &PlistValue, keys: &[&str]) -> String {
 pub fn get_notification_db_path() -> Result<PathBuf> {
     let major = macos_major_version();
     if major < 15 {
-        bail!("mac-notify supports macOS 15 (Tahoe) or newer only. detected major: {major}");
+        bail!("notify supports macOS 15 (Tahoe) or newer only. detected major: {major}");
     }
 
     let home = env::var("HOME").context("HOME is not set")?;

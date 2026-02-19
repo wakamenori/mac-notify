@@ -53,7 +53,7 @@ impl NotifyOrchestrator {
         let config_dir = env::var("HOME")
             .map(PathBuf::from)
             .unwrap_or_default()
-            .join(".config/mac-notify");
+            .join(".config/notify");
         let app_prompts = AppPrompts::load(&config_dir.join("app_prompts.json"));
         let ignored_apps = IgnoredApps::load(&config_dir.join("ignored_apps.json"));
 

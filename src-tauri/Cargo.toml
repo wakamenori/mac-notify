@@ -1,5 +1,5 @@
 [package]
-name = "mac-notify"
+name = "notify"
 version = "0.1.0"
 description = "macOS focus mode notification manager"
 authors = ["wakamenori"]

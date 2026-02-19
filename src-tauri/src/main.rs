@@ -103,14 +103,14 @@ fn show_startup_error_dialog(error_detail: &str) {
     let detail = compact_error_text(error_detail, 220);
     let message = format!(
         "初期化に失敗しました。\\n\\n\
-主な原因: mac-notify.app のフルディスクアクセス未許可\\n\
+主な原因: notify.app のフルディスクアクセス未許可\\n\
 対処: システム設定 > プライバシーとセキュリティ > フルディスクアクセスで \
-mac-notify.app を許可後、再起動してください。\\n\\n\
+notify.app を許可後、再起動してください。\\n\\n\
 詳細: {detail}"
     );
     let escaped_message = escape_applescript(&message);
     let script = format!(
-        "display dialog \"{}\" with title \"mac-notify 起動エラー\" \
+        "display dialog \"{}\" with title \"notify 起動エラー\" \
 buttons {{\"閉じる\", \"設定を開く\"}} default button \"閉じる\" with icon stop",
         escaped_message
     );
@@ -384,7 +384,7 @@ fn main() {
         Ok(orchestrator) => Arc::new(Mutex::new(orchestrator)),
         Err(err) => {
             show_startup_error_dialog(&format!("{err:#}"));
-            eprintln!("failed to initialize mac-notify: {err:#}");
+            eprintln!("failed to initialize notify: {err:#}");
             std::process::exit(1);
         }
     };

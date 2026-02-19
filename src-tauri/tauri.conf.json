@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "mac-notify",
+  "productName": "notify",
   "version": "0.1.0",
-  "identifier": "com.wakamenori.mac-notify",
+  "identifier": "com.wakamenori.notify",
   "build": {
     "beforeBuildCommand": "npm run build",
     "beforeDevCommand": "npm run dev",
@@ -15,7 +15,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "mac-notify",
+        "title": "notify",
         "width": 520,
         "height": 640,
         "resizable": false,
