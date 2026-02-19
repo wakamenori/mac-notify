@@ -390,6 +390,17 @@ fn main() {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.hide();
                 let _ = window.set_always_on_top(true);
+
+                // Make native NSWindow transparent so CSS border-radius can punch through corners.
+                #[cfg(target_os = "macos")]
+                unsafe {
+                    let ns_window_ptr = window.ns_window().expect("failed to get NSWindow");
+                    let ns_window: &objc2_app_kit::NSWindow = &*ns_window_ptr.cast();
+                    let clear = objc2_app_kit::NSColor::clearColor();
+
+                    ns_window.setOpaque(false);
+                    ns_window.setBackgroundColor(Some(&clear));
+                }
             }
             let orchestrator = app.state::<SharedOrchestrator>().0.clone();
             start_polling_thread(app.handle().clone(), orchestrator, llm.clone());

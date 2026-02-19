@@ -59,7 +59,9 @@ function render() {
     root.replaceChildren();
     const panel = create("main", "panel");
     const header = create("header", "panel-header");
+    header.setAttribute("data-tauri-drag-region", "");
     const title = create("h1", "panel-title", state.view === "notifications" ? "通知インボックス" : "設定");
+    title.setAttribute("data-tauri-drag-region", "");
     const actions = create("div", "panel-actions");
     if (state.view === "notifications") {
         const refreshBtn = create("button", "btn secondary", "更新");

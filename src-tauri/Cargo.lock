@@ -1867,6 +1867,7 @@ dependencies = [
  "dotenvy",
  "env_logger",
  "log",
+ "objc2-app-kit",
  "plist",
  "regex",
  "reqwest 0.12.28",
@@ -2044,7 +2045,7 @@ version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff32365de1b6743cb203b710788263c44a03de03802daf96092f2da4fe6ba4d7"
 dependencies = [
- "proc-macro-crate 1.3.1",
+ "proc-macro-crate 2.0.2",
  "proc-macro2",
  "quote",
  "syn 2.0.116",
