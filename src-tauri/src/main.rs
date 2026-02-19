@@ -182,7 +182,35 @@ pub(crate) fn emit_notifications_updated(app: &AppHandle, counts: [usize; 4]) {
     update_tray(app, counts);
 }
 
-fn toggle_main_window(app: &AppHandle) {
+fn position_window_under_tray(window: &tauri::WebviewWindow, tray_rect: &tauri::Rect) {
+    let scale = window.scale_factor().unwrap_or(1.0);
+
+    let (tray_x, tray_y) = match tray_rect.position {
+        tauri::Position::Physical(ref p) => (p.x as f64, p.y as f64),
+        tauri::Position::Logical(ref p) => (p.x * scale, p.y * scale),
+    };
+    let (tray_w, tray_h) = match tray_rect.size {
+        tauri::Size::Physical(ref s) => (s.width as f64, s.height as f64),
+        tauri::Size::Logical(ref s) => (s.width * scale, s.height * scale),
+    };
+
+    // Physical pixel coordinates
+    let tray_center_x = tray_x + tray_w / 2.0;
+    let tray_bottom_y = tray_y + tray_h;
+
+    let win_size = window
+        .outer_size()
+        .unwrap_or(tauri::PhysicalSize::new(520, 640));
+    let win_width = win_size.width as f64;
+
+    // Center the window horizontally under the tray icon
+    let x = tray_center_x - win_width / 2.0;
+    let y = tray_bottom_y;
+
+    let _ = window.set_position(tauri::PhysicalPosition::new(x as i32, y as i32));
+}
+
+fn toggle_main_window(app: &AppHandle, tray_rect: Option<tauri::Rect>) {
     let Some(window) = app.get_webview_window("main") else {
         warn!("main window not found");
         return;
@@ -195,6 +223,9 @@ fn toggle_main_window(app: &AppHandle) {
             }
         }
         Ok(false) => {
+            if let Some(rect) = tray_rect {
+                position_window_under_tray(&window, &rect);
+            }
             if let Err(err) = window.show() {
                 warn!("failed to show window: {err}");
                 return;
@@ -331,10 +362,11 @@ fn setup_tray(app: &tauri::App) -> Result<tauri::tray::TrayIcon, Box<dyn std::er
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
+                rect,
                 ..
             } = event
             {
-                toggle_main_window(tray.app_handle());
+                toggle_main_window(tray.app_handle(), Some(rect));
             }
         })
         .build(app)?;
