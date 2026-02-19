@@ -43,10 +43,10 @@ pub enum UrgencyLevel {
 impl UrgencyLevel {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Critical => "R4",
-            Self::High => "R3",
-            Self::Medium => "R2",
-            Self::Low => "R1",
+            Self::Critical => "URGENT",
+            Self::High => "HIGH",
+            Self::Medium => "NORMAL",
+            Self::Low => "LOW",
         }
     }
 

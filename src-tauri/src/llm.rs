@@ -224,12 +224,17 @@ fn strip_thinking_tags(text: &str) -> String {
 pub fn build_analysis_prompt(notification: &Notification, app_context: Option<&str>) -> String {
     let mut prompt = format!(
         "以下の通知を分析してください。\\n\
-JSONのみで回答し、追加説明は不要です。\\n\
+JSONのみで回答し、追加説明は不要です。\\n\\n\
+緊急度の判定基準（遅延コストで判断）:\\n\
+- critical: 今すぐ対応しないと実害が出る。分単位で損害が拡大する（例: 本番障害、セキュリティインシデント、家族からの緊急連絡）\\n\
+- high: 集中終了後すぐ見るべき。数時間放置すると困る（例: 上司からの直接メンション、今日締切のリマインダー、承認待ちのブロッカー）\\n\
+- medium: 後で確認すれば十分。半日〜1日遅れても問題ない（例: PRレビュー依頼、一般的なチャット、ミーティング通知）\\n\
+- low: 見なくてもほぼ困らない。無視しても実害なし（例: マーケティング通知、SNSのいいね、アプリ更新案内）\\n\\n\
 スキーマ:\\n\
 {{\\n\
-  \"urgency_level\": \"critical|high|medium|low\",\\n\
   \"summary_line\": \"30文字以内の要約\",\\n\
-  \"reason\": \"判定理由を1文\"\\n\
+  \"reason\": \"判定理由を1文\",\\n\
+  \"urgency_level\": \"critical|high|medium|low\"\\n\
 }}\\n\\n\
 通知:\\n\
 アプリ: {}\\n\
