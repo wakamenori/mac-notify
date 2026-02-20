@@ -152,9 +152,11 @@ impl NotifyOrchestrator {
                     .first()
                     .map(|n| n.app_name.clone())
                     .unwrap_or_else(|| app_name_from_bundle(&bundle_id));
+                let icon_base64 = app_icon_base64(&bundle_id);
                 UiNotificationGroup {
                     bundle_id,
                     app_name,
+                    icon_base64,
                     notifications,
                 }
             })
@@ -383,6 +385,111 @@ fn analyze_single(
 }
 
 pub fn app_name_from_bundle(bundle_id: &str) -> String {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    static CACHE: std::sync::LazyLock<Mutex<HashMap<String, String>>> =
+        std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    if let Ok(cache) = CACHE.lock() {
+        if let Some(name) = cache.get(bundle_id) {
+            return name.clone();
+        }
+    }
+
+    let name = resolve_app_display_name(bundle_id);
+
+    if let Ok(mut cache) = CACHE.lock() {
+        cache.insert(bundle_id.to_string(), name.clone());
+    }
+
+    name
+}
+
+pub fn app_icon_base64(bundle_id: &str) -> Option<String> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    static CACHE: std::sync::LazyLock<Mutex<HashMap<String, Option<String>>>> =
+        std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    if let Ok(cache) = CACHE.lock() {
+        if let Some(icon) = cache.get(bundle_id) {
+            return icon.clone();
+        }
+    }
+
+    let icon = resolve_app_icon(bundle_id);
+
+    if let Ok(mut cache) = CACHE.lock() {
+        cache.insert(bundle_id.to_string(), icon.clone());
+    }
+
+    icon
+}
+
+fn resolve_app_icon(bundle_id: &str) -> Option<String> {
+    // Use swift + NSWorkspace to get the app icon as base64 PNG (works for all apps including Asset Catalog icons)
+    let script = r#"
+import AppKit
+let bid = CommandLine.arguments[1]
+guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bid) else { exit(1) }
+let icon = NSWorkspace.shared.icon(forFile: url.path)
+let size = NSSize(width: 32, height: 32)
+let img = NSImage(size: size)
+img.lockFocus()
+icon.draw(in: NSRect(origin: .zero, size: size))
+img.unlockFocus()
+guard let tiff = img.tiffRepresentation,
+      let rep = NSBitmapImageRep(data: tiff),
+      let png = rep.representation(using: .png, properties: [:]) else { exit(1) }
+print(png.base64EncodedString())
+"#;
+
+    let output = std::process::Command::new("swift")
+        .args(["-e", script, bundle_id])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let b64 = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if b64.is_empty() {
+        None
+    } else {
+        Some(b64)
+    }
+}
+
+fn resolve_app_display_name(bundle_id: &str) -> String {
+    // Use mdfind to locate the .app bundle, then read display name from Info.plist
+    if let Ok(output) = std::process::Command::new("mdfind")
+        .arg(format!("kMDItemCFBundleIdentifier == '{bundle_id}'"))
+        .output()
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if let Some(app_path) = stdout.lines().next().filter(|l| !l.is_empty()) {
+            let plist_path = format!("{app_path}/Contents/Info.plist");
+            // Try CFBundleDisplayName first, then CFBundleName
+            for key in ["CFBundleDisplayName", "CFBundleName"] {
+                if let Ok(out) = std::process::Command::new("/usr/libexec/PlistBuddy")
+                    .args(["-c", &format!("Print :{key}"), &plist_path])
+                    .output()
+                {
+                    if out.status.success() {
+                        let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                        if !name.is_empty() {
+                            return name;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: use last segment of bundle_id
     let last = bundle_id.rsplit('.').next().unwrap_or(bundle_id);
     if last.is_empty() {
         bundle_id.to_string()

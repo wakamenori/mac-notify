@@ -128,7 +128,16 @@ function render() {
             const section = create("section", "group");
             section.style.animationDelay = `${groupIdx * 0.06}s`;
             const groupHeader = create("div", "group-header");
+            const groupTitleWrap = create("div", "group-title-wrap");
+            if (group.iconBase64) {
+                const icon = document.createElement("img");
+                icon.className = "group-icon";
+                icon.src = `data:image/png;base64,${group.iconBase64}`;
+                icon.alt = group.appName;
+                groupTitleWrap.append(icon);
+            }
             const groupTitle = create("h2", "group-title", `${group.appName} (${group.notifications.length})`);
+            groupTitleWrap.append(groupTitle);
             const groupActions = create("div", "group-actions");
             const promptBtn = create("button", "group-clear-btn");
             promptBtn.title = "このアプリのプロンプトを設定";
@@ -169,7 +178,7 @@ function render() {
                 await clearApp(group.bundleId);
             });
             groupActions.append(promptBtn, ignoreBtn, clearAppBtn);
-            groupHeader.append(groupTitle, groupActions);
+            groupHeader.append(groupTitleWrap, groupActions);
             const cards = create("div", "cards");
             let cardIdx = 0;
             for (const notification of group.notifications) {

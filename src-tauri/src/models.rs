@@ -95,5 +95,6 @@ pub struct UiNotification {
 pub struct UiNotificationGroup {
     pub bundle_id: String,
     pub app_name: String,
+    pub icon_base64: Option<String>,
     pub notifications: Vec<UiNotification>,
 }

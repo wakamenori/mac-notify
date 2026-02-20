@@ -23,6 +23,7 @@ type UiNotification = {
 type UiNotificationGroup = {
   bundleId: string;
   appName: string;
+  iconBase64: string | null;
   notifications: UiNotification[];
 };
 
@@ -217,11 +218,20 @@ function render(): void {
       const section = create("section", "group");
       section.style.animationDelay = `${groupIdx * 0.06}s`;
       const groupHeader = create("div", "group-header");
+      const groupTitleWrap = create("div", "group-title-wrap");
+      if (group.iconBase64) {
+        const icon = document.createElement("img");
+        icon.className = "group-icon";
+        icon.src = `data:image/png;base64,${group.iconBase64}`;
+        icon.alt = group.appName;
+        groupTitleWrap.append(icon);
+      }
       const groupTitle = create(
         "h2",
         "group-title",
         `${group.appName} (${group.notifications.length})`,
       );
+      groupTitleWrap.append(groupTitle);
 
       const groupActions = create("div", "group-actions");
 
@@ -269,7 +279,7 @@ function render(): void {
       });
 
       groupActions.append(promptBtn, ignoreBtn, clearAppBtn);
-      groupHeader.append(groupTitle, groupActions);
+      groupHeader.append(groupTitleWrap, groupActions);
 
       const cards = create("div", "cards");
       let cardIdx = 0;
