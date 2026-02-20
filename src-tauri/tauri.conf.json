@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "notify",
+  "productName": "Notify",
   "version": "0.1.0",
   "identifier": "com.wakamenori.notify",
   "build": {
@@ -15,7 +15,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "notify",
+        "title": "Notify",
         "width": 520,
         "height": 640,
         "resizable": false,
