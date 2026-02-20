@@ -222,8 +222,10 @@ fn strip_thinking_tags(text: &str) -> String {
 }
 
 pub fn build_analysis_prompt(notification: &Notification, app_context: Option<&str>) -> String {
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S (%a)");
     let mut prompt = format!(
-        "以下の通知を分析してください。\\n\
+        "現在日時: {now}\\n\\n\
+以下の通知を分析してください。\\n\
 JSONのみで回答し、追加説明は不要です。\\n\\n\
 緊急度の判定基準（遅延コストで判断）:\\n\
 - critical: 今すぐ対応しないと実害が出る。分単位で損害が拡大する（例: 本番障害、セキュリティインシデント、家族からの緊急連絡）\\n\
@@ -232,10 +234,15 @@ JSONのみで回答し、追加説明は不要です。\\n\\n\
 - low: 見なくてもほぼ困らない。無視しても実害なし（例: マーケティング通知、SNSのいいね、アプリ更新案内）\\n\\n\
 スキーマ:\\n\
 {{\\n\
-  \"summary_line\": \"30文字以内の要約\",\\n\
+  \"summary_line\": \"誰から何の用件か一目で分かる要約\",\\n\
   \"reason\": \"判定理由を1文\",\\n\
   \"urgency_level\": \"critical|high|medium|low\"\\n\
 }}\\n\\n\
+summary_lineの例:\\n\
+- 良い例: \"田中さんがPR #42にレビューコメント\"\\n\
+- 良い例: \"本番DBのCPU使用率が95%超過\"\\n\
+- 悪い例: \"PRにコメントあり\"\\n\
+- 悪い例: \"アラート発生\"\\n\\n\
 通知:\\n\
 アプリ: {}\\n\
 タイトル: {}\\n\
@@ -275,7 +282,7 @@ pub fn parse_analysis_response(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|v| !v.is_empty())
-        .map(ToString::to_string)
+        .map(|s| truncate_chars(s, 60))
         .unwrap_or_else(|| default_summary_line(notification));
 
     let reason = parsed
@@ -312,8 +319,12 @@ pub fn default_summary_line(notification: &Notification) -> String {
         "内容不明の通知".to_string()
     };
 
-    let mut chars = text.chars().take(60).collect::<String>();
-    if text.chars().count() > 60 {
+    truncate_chars(&text, 60)
+}
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    let mut chars = s.chars().take(max).collect::<String>();
+    if s.chars().count() > max {
         chars.push('…');
     }
     chars
