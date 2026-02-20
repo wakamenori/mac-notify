@@ -146,17 +146,26 @@ function render(): void {
   const actions = create("div", "panel-actions");
 
   if (state.view === "notifications") {
-    const refreshBtn = create("button", "btn secondary", "更新");
+    const refreshBtn = create("button", "icon-btn");
+    refreshBtn.title = "更新";
+    refreshBtn.innerHTML =
+      '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.33 1.33v4.67h4.67"/><path d="M2.34 10a6 6 0 1 0 1.16-6.52L1.33 6"/></svg>';
     refreshBtn.addEventListener("click", () => {
       void loadGroups();
     });
 
-    const dummyBtn = create("button", "btn secondary", "ダミー投入");
+    const dummyBtn = create("button", "icon-btn");
+    dummyBtn.title = "ダミー投入";
+    dummyBtn.innerHTML =
+      '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1v14"/><path d="M1 8h14"/></svg>';
     dummyBtn.addEventListener("click", async () => {
       await injectDummy();
     });
 
-    const clearAllBtn = create("button", "btn warn", "全通知をクリア");
+    const clearAllBtn = create("button", "icon-btn warn");
+    clearAllBtn.title = "全通知をクリア";
+    clearAllBtn.innerHTML =
+      '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h12M5.33 4V2.67a1.33 1.33 0 0 1 1.34-1.34h2.66a1.33 1.33 0 0 1 1.34 1.34V4M6.67 7.33v4M9.33 7.33v4"/><path d="M3.33 4h9.34l-.67 9.33a1.33 1.33 0 0 1-1.33 1.34H5.33A1.33 1.33 0 0 1 4 13.33L3.33 4z"/></svg>';
     clearAllBtn.addEventListener("click", () => {
       state.confirm = {
         message: "全通知をクリアしますか？",
@@ -171,11 +180,16 @@ function render(): void {
     actions.append(refreshBtn, dummyBtn, clearAllBtn);
   }
 
-  const settingsBtn = create(
-    "button",
-    `btn ${state.view === "settings" ? "warn" : "secondary"}`,
-    state.view === "settings" ? "戻る" : "設定",
-  );
+  const settingsBtn = create("button", "icon-btn");
+  if (state.view === "settings") {
+    settingsBtn.title = "戻る";
+    settingsBtn.innerHTML =
+      '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2L4 8l6 6"/></svg>';
+  } else {
+    settingsBtn.title = "設定";
+    settingsBtn.innerHTML =
+      '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.5"/><path d="M13.54 9.98a1.13 1.13 0 0 0 .23 1.24l.04.04a1.37 1.37 0 1 1-1.94 1.94l-.04-.04a1.13 1.13 0 0 0-1.24-.23 1.13 1.13 0 0 0-.69 1.04v.12a1.37 1.37 0 1 1-2.74 0v-.06a1.13 1.13 0 0 0-.74-1.04 1.13 1.13 0 0 0-1.24.23l-.04.04a1.37 1.37 0 1 1-1.94-1.94l.04-.04a1.13 1.13 0 0 0 .23-1.24 1.13 1.13 0 0 0-1.04-.69h-.12a1.37 1.37 0 0 1 0-2.74h.06a1.13 1.13 0 0 0 1.04-.74 1.13 1.13 0 0 0-.23-1.24l-.04-.04A1.37 1.37 0 1 1 5.08 2.83l.04.04a1.13 1.13 0 0 0 1.24.23h.05a1.13 1.13 0 0 0 .69-1.04v-.12a1.37 1.37 0 0 1 2.74 0v.06a1.13 1.13 0 0 0 .69 1.04 1.13 1.13 0 0 0 1.24-.23l.04-.04a1.37 1.37 0 1 1 1.94 1.94l-.04.04a1.13 1.13 0 0 0-.23 1.24v.05a1.13 1.13 0 0 0 1.04.69h.12a1.37 1.37 0 0 1 0 2.74h-.06a1.13 1.13 0 0 0-1.04.69z"/></svg>';
+  }
   settingsBtn.addEventListener("click", () => {
     if (state.view === "notifications") {
       state.view = "settings";
@@ -450,7 +464,10 @@ function renderDialog(notification: UiNotification): HTMLElement {
 function renderSettingsView(): HTMLElement {
   const container = create("section", "groups");
 
-  const addBtn = create("button", "btn secondary", "追加");
+  const addBtn = create("button", "icon-btn");
+  addBtn.title = "プロンプトを追加";
+  addBtn.innerHTML =
+    '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1v14"/><path d="M1 8h14"/></svg>';
   addBtn.style.marginTop = "12px";
   addBtn.addEventListener("click", () => {
     state.editingPrompt = { bundleId: "", context: "", isNew: true };
@@ -475,7 +492,8 @@ function renderSettingsView(): HTMLElement {
     const rowActions = create("div", "panel-actions");
     const editBtn = create("button", "group-clear-btn");
     editBtn.title = "編集";
-    editBtn.textContent = "✎";
+    editBtn.innerHTML =
+      '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.33 2a1.89 1.89 0 0 1 2.67 2.67L5.33 13.33 1.33 14.67l1.34-4L11.33 2z"/></svg>';
     editBtn.addEventListener("click", () => {
       state.editingPrompt = {
         bundleId: prompt.bundleId,
@@ -527,7 +545,10 @@ function renderSettingsView(): HTMLElement {
   for (const bundleId of state.ignoredApps) {
     const row = create("div", "group-header");
     const label = create("span", "card-sub", bundleId);
-    const unignoreBtn = create("button", "btn secondary", "解除");
+    const unignoreBtn = create("button", "group-clear-btn");
+    unignoreBtn.title = "無視を解除";
+    unignoreBtn.innerHTML =
+      '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1l14 14"/><path d="M9.5 4a6 6 0 0 1 5.17 8.94"/><path d="M1.33 7.06A6 6 0 0 0 6.5 16"/><circle cx="8" cy="8" r="6"/></svg>';
     unignoreBtn.addEventListener("click", async () => {
       await removeIgnoredApp(bundleId);
     });
@@ -582,7 +603,10 @@ function renderPromptForm(editing: {
 
   const actions = create("div", "panel-actions");
   actions.style.marginTop = "8px";
-  const saveBtn = create("button", "btn secondary", "保存");
+  const saveBtn = create("button", "icon-btn");
+  saveBtn.title = "保存";
+  saveBtn.innerHTML =
+    '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8.5l3.5 3.5 7.5-8"/></svg>';
   saveBtn.addEventListener("click", async () => {
     if (!editing.bundleId.trim() || !editing.context.trim()) {
       state.error = "Bundle ID とコンテキストは必須です。";
@@ -593,7 +617,10 @@ function renderPromptForm(editing: {
     state.editingPrompt = null;
   });
 
-  const cancelBtn = create("button", "btn secondary", "キャンセル");
+  const cancelBtn = create("button", "icon-btn");
+  cancelBtn.title = "キャンセル";
+  cancelBtn.innerHTML =
+    '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l10 10"/><path d="M13 3L3 13"/></svg>';
   cancelBtn.addEventListener("click", () => {
     state.editingPrompt = null;
     render();
