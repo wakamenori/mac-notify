@@ -167,18 +167,22 @@ function render(): void {
     clearAllBtn.title = "全通知をクリア";
     clearAllBtn.innerHTML =
       '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h12M5.33 4V2.67a1.33 1.33 0 0 1 1.34-1.34h2.66a1.33 1.33 0 0 1 1.34 1.34V4M6.67 7.33v4M9.33 7.33v4"/><path d="M3.33 4h9.34l-.67 9.33a1.33 1.33 0 0 1-1.33 1.34H5.33A1.33 1.33 0 0 1 4 13.33L3.33 4z"/></svg>';
-    clearAllBtn.addEventListener("click", () => {
-      state.confirm = {
-        message: "全通知をクリアしますか？",
-        okLabel: "クリア",
-        onOk: async () => {
-          await clearAll();
-        },
-      };
-      render();
+    clearAllBtn.addEventListener("click", async () => {
+      await clearAll();
     });
 
-    actions.append(refreshBtn, dummyBtn, clearAllBtn);
+    const clearAndCloseBtn = create("button", "icon-btn warn");
+    clearAndCloseBtn.title = "全通知をクリアして閉じる";
+    clearAndCloseBtn.innerHTML =
+      '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2H2v12h4"/><path d="M9 5l3 3-3 3"/><path d="M12 8H4"/></svg>';
+    clearAndCloseBtn.addEventListener("click", async () => {
+      const cleared = await clearAll();
+      if (cleared) {
+        await hideMainWindow();
+      }
+    });
+
+    actions.append(refreshBtn, dummyBtn, clearAllBtn, clearAndCloseBtn);
   }
 
   const settingsBtn = create("button", "icon-btn");
@@ -743,11 +747,22 @@ async function clearApp(bundleId: string): Promise<void> {
   }
 }
 
-async function clearAll(): Promise<void> {
+async function clearAll(): Promise<boolean> {
   try {
     state.error = "";
     await invokeCommand<number>("clear_all_notifications");
     await loadGroups();
+    return true;
+  } catch (error) {
+    state.error = (error as Error).message;
+    render();
+    return false;
+  }
+}
+
+async function hideMainWindow(): Promise<void> {
+  try {
+    await invokeCommand<void>("hide_main_window");
   } catch (error) {
     state.error = (error as Error).message;
     render();

@@ -22,7 +22,7 @@ use tauri::{
 use commands::{
     add_ignored_app, clear_all_notifications, clear_app_notifications, clear_notification,
     delete_app_prompt, get_app_prompts, get_ignored_apps, get_notification_groups,
-    inject_dummy_notifications, open_app, remove_ignored_app, set_app_prompt,
+    hide_main_window, inject_dummy_notifications, open_app, remove_ignored_app, set_app_prompt,
 };
 use llm::LlmClient;
 use orchestrator::{
@@ -403,6 +403,7 @@ fn main() {
             get_ignored_apps,
             add_ignored_app,
             remove_ignored_app,
+            hide_main_window,
             open_app
         ])
         .on_window_event(|window, event| {

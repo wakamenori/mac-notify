@@ -1,5 +1,5 @@
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::emit_notifications_updated;
 use crate::models::UiNotificationGroup;
@@ -133,6 +133,16 @@ pub fn open_app(bundle_id: String) -> Result<(), String> {
         .spawn()
         .map_err(|err| format!("failed to open app {bundle_id}: {err}"))?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn hide_main_window(app: AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    window
+        .hide()
+        .map_err(|err| format!("failed to hide main window: {err}"))
 }
 
 #[tauri::command]
