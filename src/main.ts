@@ -85,6 +85,28 @@ const state: {
   confirm: null,
 };
 
+const dom: {
+  panel: HTMLElement | null;
+  title: HTMLElement | null;
+  actions: HTMLElement | null;
+  notificationsView: HTMLElement | null;
+  settingsView: HTMLElement | null;
+  error: HTMLElement | null;
+  overlays: HTMLElement | null;
+  groupElements: Map<string, { signature: string; element: HTMLElement }>;
+  notificationById: Map<number, UiNotification>;
+} = {
+  panel: null,
+  title: null,
+  actions: null,
+  notificationsView: null,
+  settingsView: null,
+  error: null,
+  overlays: null,
+  groupElements: new Map(),
+  notificationById: new Map(),
+};
+
 async function invokeCommand<T>(
   command: string,
   args?: Record<string, unknown>,
@@ -131,62 +153,296 @@ function formatRelativeTime(timestamp: number): string {
   return `${weeks}週間前`;
 }
 
-function render(): void {
-  root.replaceChildren();
+function initView(): void {
+  if (dom.panel) {
+    return;
+  }
 
   const panel = create("main", "panel");
   const header = create("header", "panel-header");
   header.setAttribute("data-tauri-drag-region", "");
-  const title = create(
-    "h1",
-    "panel-title",
-    state.view === "notifications" ? "通知インボックス" : "設定",
-  );
+
+  const title = create("h1", "panel-title", "通知インボックス");
   title.setAttribute("data-tauri-drag-region", "");
 
   const actions = create("div", "panel-actions");
+  const notificationsView = create("section", "groups");
+  const settingsView = create("section", "groups");
+  const error = create("p", "error");
+  const overlays = create("div", "overlay-root");
 
-  if (state.view === "notifications") {
+  header.append(title, actions);
+  panel.append(header, notificationsView, settingsView, error);
+  root.append(panel, overlays);
+
+  dom.panel = panel;
+  dom.title = title;
+  dom.actions = actions;
+  dom.notificationsView = notificationsView;
+  dom.settingsView = settingsView;
+  dom.error = error;
+  dom.overlays = overlays;
+
+  root.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+
+    const overlay = target.closest<HTMLElement>(".overlay[data-dismiss-on-backdrop]");
+    if (overlay && target === overlay) {
+      const dismissType = overlay.dataset.dismissOnBackdrop;
+      if (dismissType === "selected") {
+        state.selected = null;
+      }
+      if (dismissType === "confirm") {
+        state.confirm = null;
+      }
+      render();
+      return;
+    }
+
+    const actionElement = target.closest<HTMLElement>("[data-action]");
+    if (!actionElement) {
+      return;
+    }
+
+    const action = actionElement.dataset.action;
+    if (!action) {
+      return;
+    }
+
+    const id = Number(actionElement.dataset.id);
+    const bundleId = actionElement.dataset.bundleId;
+
+    switch (action) {
+      case "refresh":
+        void loadGroups();
+        break;
+      case "inject-dummy":
+        void injectDummy();
+        break;
+      case "clear-all":
+        void clearAll();
+        break;
+      case "clear-all-close":
+        void (async () => {
+          const cleared = await clearAll();
+          if (cleared) {
+            await hideMainWindow();
+          }
+        })();
+        break;
+      case "toggle-settings":
+        if (state.view === "notifications") {
+          state.view = "settings";
+          state.editingPrompt = null;
+          void loadPrompts();
+        } else {
+          state.view = "notifications";
+          render();
+        }
+        break;
+      case "open-notification": {
+        const selected = dom.notificationById.get(id);
+        if (!selected) {
+          break;
+        }
+        state.selected = selected;
+        render();
+        break;
+      }
+      case "open-app":
+        if (bundleId) {
+          void invokeCommand("open_app", { bundleId });
+        }
+        break;
+      case "clear-one":
+        if (Number.isFinite(id)) {
+          if (state.selected?.id === id) {
+            state.selected = null;
+          }
+          void clearOne(id);
+        }
+        break;
+      case "open-group-prompt": {
+        if (!bundleId) {
+          break;
+        }
+        void (async () => {
+          state.view = "settings";
+          state.error = "";
+          await loadPrompts();
+          const existing = state.prompts.find((p) => p.bundleId === bundleId);
+          state.editingPrompt = {
+            bundleId,
+            context: existing?.context ?? "",
+            isNew: !existing,
+          };
+          render();
+        })();
+        break;
+      }
+      case "ignore-app":
+        if (bundleId) {
+          const group = state.groups.find((entry) => entry.bundleId === bundleId);
+          state.confirm = {
+            message: `${group?.appName ?? bundleId} の通知を今後無視しますか？`,
+            okLabel: "無視する",
+            onOk: async () => {
+              await addIgnoredApp(bundleId);
+              await clearApp(bundleId);
+            },
+          };
+          render();
+        }
+        break;
+      case "clear-app":
+        if (bundleId) {
+          void clearApp(bundleId);
+        }
+        break;
+      case "close-dialog":
+        state.selected = null;
+        render();
+        break;
+      case "confirm-cancel":
+        state.confirm = null;
+        render();
+        break;
+      case "confirm-ok": {
+        const current = state.confirm;
+        state.confirm = null;
+        render();
+        current?.onOk();
+        break;
+      }
+      case "settings-add-prompt":
+        state.editingPrompt = { bundleId: "", context: "", isNew: true };
+        render();
+        break;
+      case "settings-edit-prompt": {
+        if (!bundleId) {
+          break;
+        }
+        const prompt = state.prompts.find((entry) => entry.bundleId === bundleId);
+        if (!prompt) {
+          break;
+        }
+        state.editingPrompt = {
+          bundleId: prompt.bundleId,
+          context: prompt.context,
+          isNew: false,
+        };
+        render();
+        break;
+      }
+      case "settings-delete-prompt":
+        if (bundleId) {
+          void deletePrompt(bundleId);
+        }
+        break;
+      case "settings-remove-ignored":
+        if (bundleId) {
+          void removeIgnoredApp(bundleId);
+        }
+        break;
+      case "settings-save-prompt": {
+        const editing = state.editingPrompt;
+        if (!editing) {
+          break;
+        }
+        if (!editing.bundleId.trim() || !editing.context.trim()) {
+          state.error = "Bundle ID とコンテキストは必須です。";
+          render();
+          break;
+        }
+        void (async () => {
+          await savePrompt(editing.bundleId.trim(), editing.context.trim());
+          state.editingPrompt = null;
+          render();
+        })();
+        break;
+      }
+      case "settings-cancel-prompt":
+        state.editingPrompt = null;
+        render();
+        break;
+      default:
+        break;
+    }
+  });
+  root.addEventListener("input", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) {
+      return;
+    }
+    if (!state.editingPrompt) {
+      return;
+    }
+    if (target.dataset.field === "bundle-id") {
+      state.editingPrompt.bundleId = target.value;
+    }
+    if (target.dataset.field === "context") {
+      state.editingPrompt.context = target.value;
+    }
+  });
+}
+
+
+function assertRootFrameStable(): void {
+  if (!dom.panel || !dom.overlays) {
+    return;
+  }
+  const children = Array.from(root.children);
+  const isStable =
+    children.length === 2 &&
+    children[0] === dom.panel &&
+    children[1] === dom.overlays;
+  if (!isStable) {
+    throw new Error("#app の直下要素構造が不正です");
+  }
+}
+
+function renderHeaderActions(view: "notifications" | "settings", _loading: boolean): void {
+  if (!dom.actions || !dom.title) {
+    return;
+  }
+
+  dom.title.textContent = view === "notifications" ? "通知インボックス" : "設定";
+
+  const actions: HTMLElement[] = [];
+  if (view === "notifications") {
     const refreshBtn = create("button", "icon-btn");
     refreshBtn.title = "更新";
+    refreshBtn.dataset.action = "refresh";
     refreshBtn.innerHTML =
       '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.33 1.33v4.67h4.67"/><path d="M2.34 10a6 6 0 1 0 1.16-6.52L1.33 6"/></svg>';
-    refreshBtn.addEventListener("click", () => {
-      void loadGroups();
-    });
 
     const dummyBtn = create("button", "icon-btn");
     dummyBtn.title = "ダミー投入";
+    dummyBtn.dataset.action = "inject-dummy";
     dummyBtn.innerHTML =
       '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1v14"/><path d="M1 8h14"/></svg>';
-    dummyBtn.addEventListener("click", async () => {
-      await injectDummy();
-    });
 
     const clearAllBtn = create("button", "icon-btn warn");
     clearAllBtn.title = "全通知をクリア";
+    clearAllBtn.dataset.action = "clear-all";
     clearAllBtn.innerHTML =
       '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h12M5.33 4V2.67a1.33 1.33 0 0 1 1.34-1.34h2.66a1.33 1.33 0 0 1 1.34 1.34V4M6.67 7.33v4M9.33 7.33v4"/><path d="M3.33 4h9.34l-.67 9.33a1.33 1.33 0 0 1-1.33 1.34H5.33A1.33 1.33 0 0 1 4 13.33L3.33 4z"/></svg>';
-    clearAllBtn.addEventListener("click", async () => {
-      await clearAll();
-    });
 
     const clearAndCloseBtn = create("button", "icon-btn warn");
     clearAndCloseBtn.title = "全通知をクリアして閉じる";
+    clearAndCloseBtn.dataset.action = "clear-all-close";
     clearAndCloseBtn.innerHTML =
       '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2H2v12h4"/><path d="M9 5l3 3-3 3"/><path d="M12 8H4"/></svg>';
-    clearAndCloseBtn.addEventListener("click", async () => {
-      const cleared = await clearAll();
-      if (cleared) {
-        await hideMainWindow();
-      }
-    });
 
-    actions.append(refreshBtn, dummyBtn, clearAllBtn, clearAndCloseBtn);
+    actions.push(refreshBtn, dummyBtn, clearAllBtn, clearAndCloseBtn);
   }
 
   const settingsBtn = create("button", "icon-btn");
-  if (state.view === "settings") {
+  settingsBtn.dataset.action = "toggle-settings";
+  if (view === "settings") {
     settingsBtn.title = "戻る";
     settingsBtn.innerHTML =
       '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2L4 8l6 6"/></svg>';
@@ -195,128 +451,170 @@ function render(): void {
     settingsBtn.innerHTML =
       '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.5"/><path d="M13.54 9.98a1.13 1.13 0 0 0 .23 1.24l.04.04a1.37 1.37 0 1 1-1.94 1.94l-.04-.04a1.13 1.13 0 0 0-1.24-.23 1.13 1.13 0 0 0-.69 1.04v.12a1.37 1.37 0 1 1-2.74 0v-.06a1.13 1.13 0 0 0-.74-1.04 1.13 1.13 0 0 0-1.24.23l-.04.04a1.37 1.37 0 1 1-1.94-1.94l.04-.04a1.13 1.13 0 0 0 .23-1.24 1.13 1.13 0 0 0-1.04-.69h-.12a1.37 1.37 0 0 1 0-2.74h.06a1.13 1.13 0 0 0 1.04-.74 1.13 1.13 0 0 0-.23-1.24l-.04-.04A1.37 1.37 0 1 1 5.08 2.83l.04.04a1.13 1.13 0 0 0 1.24.23h.05a1.13 1.13 0 0 0 .69-1.04v-.12a1.37 1.37 0 0 1 2.74 0v.06a1.13 1.13 0 0 0 .69 1.04 1.13 1.13 0 0 0 1.24-.23l.04-.04a1.37 1.37 0 1 1 1.94 1.94l-.04.04a1.13 1.13 0 0 0-.23 1.24v.05a1.13 1.13 0 0 0 1.04.69h.12a1.37 1.37 0 0 1 0 2.74h-.06a1.13 1.13 0 0 0-1.04.69z"/></svg>';
   }
-  settingsBtn.addEventListener("click", () => {
-    if (state.view === "notifications") {
-      state.view = "settings";
-      state.editingPrompt = null;
-      void loadPrompts();
-    } else {
-      state.view = "notifications";
-    }
-    render();
+  actions.push(settingsBtn);
+
+  dom.actions.replaceChildren(...actions);
+}
+
+function groupSignature(group: UiNotificationGroup): string {
+  return JSON.stringify({
+    appName: group.appName,
+    iconBase64: group.iconBase64,
+    notifications: group.notifications.map((notification) => ({
+      id: notification.id,
+      title: notification.title,
+      body: notification.body,
+      subtitle: notification.subtitle,
+      urgencyColor: notification.urgencyColor,
+      urgencyLabel: notification.urgencyLabel,
+      summaryLine: notification.summaryLine,
+      timestamp: notification.timestamp,
+    })),
   });
-  actions.append(settingsBtn);
+}
 
-  header.append(title, actions);
+function renderGroups(groups: UiNotificationGroup[]): void {
+  if (!dom.notificationsView || !dom.settingsView) {
+    return;
+  }
 
-  if (state.view === "notifications") {
-    const groups = create("section", "groups");
-    if (!state.loading && state.groups.length === 0) {
-      groups.append(
-        create("div", "empty", "現在表示できる通知はありません。"),
-      );
+  dom.notificationsView.style.display = state.view === "notifications" ? "" : "none";
+  dom.settingsView.style.display = state.view === "settings" ? "" : "none";
+
+  if (state.view !== "notifications") {
+    renderSettingsView(dom.settingsView);
+    return;
+  }
+
+  dom.notificationById.clear();
+  const activeBundleIds = new Set(groups.map((group) => group.bundleId));
+  for (const [bundleId, entry] of dom.groupElements.entries()) {
+    if (!activeBundleIds.has(bundleId)) {
+      entry.element.remove();
+      dom.groupElements.delete(bundleId);
+    }
+  }
+
+  const orderedElements: HTMLElement[] = [];
+  let groupIdx = 0;
+  for (const group of groups) {
+    for (const notification of group.notifications) {
+      dom.notificationById.set(notification.id, notification);
     }
 
-    let groupIdx = 0;
-    for (const group of state.groups) {
-      const section = create("section", "group");
+    const signature = groupSignature(group);
+    const existing = dom.groupElements.get(group.bundleId);
+    let section: HTMLElement;
+    if (!existing) {
+      section = create("section", "group");
+      dom.groupElements.set(group.bundleId, { signature: "", element: section });
+    } else {
+      section = existing.element;
+    }
+
+    if (!existing || existing.signature !== signature) {
       section.style.animationDelay = `${groupIdx * 0.06}s`;
-      const groupHeader = create("div", "group-header");
-      const groupTitleWrap = create("div", "group-title-wrap");
-      if (group.iconBase64) {
-        const icon = document.createElement("img");
-        icon.className = "group-icon";
-        icon.src = `data:image/png;base64,${group.iconBase64}`;
-        icon.alt = group.appName;
-        groupTitleWrap.append(icon);
-      }
-      const groupTitle = create(
-        "h2",
-        "group-title",
-        `${group.appName} (${group.notifications.length})`,
-      );
-      groupTitleWrap.append(groupTitle);
-
-      const groupActions = create("div", "group-actions");
-
-      const promptBtn = create("button", "group-clear-btn");
-      promptBtn.title = "このアプリのプロンプトを設定";
-      promptBtn.innerHTML =
-        '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.33 2a1.89 1.89 0 0 1 2.67 2.67L5.33 13.33 1.33 14.67l1.34-4L11.33 2z"/></svg>';
-      promptBtn.addEventListener("click", async () => {
-        state.view = "settings";
-        state.error = "";
-        await loadPrompts();
-        const existing = state.prompts.find(
-          (p) => p.bundleId === group.bundleId,
-        );
-        state.editingPrompt = {
-          bundleId: group.bundleId,
-          context: existing?.context ?? "",
-          isNew: !existing,
-        };
-        render();
-      });
-
-      const ignoreBtn = create("button", "group-clear-btn");
-      ignoreBtn.title = "このアプリを無視";
-      ignoreBtn.innerHTML =
-        '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1l14 14"/><path d="M6.5 6.5a2 2 0 0 0 3 3"/><path d="M2.5 2.5C1.4 3.7.5 5.2.5 8c0 4.5 7.5 7 7.5 7s2.3-.8 4.5-2.5"/><path d="M14 11.2C15 9.8 15.5 8.5 15.5 8c0-4.5-7.5-7-7.5-7-.8.4-1.7 1-2.5 1.6"/></svg>';
-      ignoreBtn.addEventListener("click", () => {
-        state.confirm = {
-          message: `${group.appName} の通知を今後無視しますか？`,
-          okLabel: "無視する",
-          onOk: async () => {
-            await addIgnoredApp(group.bundleId);
-            await clearApp(group.bundleId);
-          },
-        };
-        render();
-      });
-
-      const clearAppBtn = create("button", "group-clear-btn");
-      clearAppBtn.title = "このアプリをクリア";
-      clearAppBtn.innerHTML =
-        '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h12M5.33 4V2.67a1.33 1.33 0 0 1 1.34-1.34h2.66a1.33 1.33 0 0 1 1.34 1.34V4M6.67 7.33v4M9.33 7.33v4"/><path d="M3.33 4h9.34l-.67 9.33a1.33 1.33 0 0 1-1.33 1.34H5.33A1.33 1.33 0 0 1 4 13.33L3.33 4z"/></svg>';
-      clearAppBtn.addEventListener("click", async () => {
-        await clearApp(group.bundleId);
-      });
-
-      groupActions.append(promptBtn, ignoreBtn, clearAppBtn);
-      groupHeader.append(groupTitleWrap, groupActions);
-
-      const cards = create("div", "cards");
-      let cardIdx = 0;
-      for (const notification of group.notifications) {
-        const card = renderCard(notification);
-        card.style.animationDelay = `${groupIdx * 0.06 + cardIdx * 0.03}s`;
-        cards.append(card);
-        cardIdx++;
-      }
-
-      section.append(groupHeader, cards);
-      groups.append(section);
-      groupIdx++;
+      section.replaceChildren(...renderGroupContent(group, groupIdx));
+      dom.groupElements.set(group.bundleId, { signature, element: section });
     }
 
-    panel.append(header, groups);
-  } else {
-    panel.append(header, renderSettingsView());
+    orderedElements.push(section);
+    groupIdx++;
   }
 
-  if (state.error) {
-    panel.append(create("p", "error", state.error));
+  if (!state.loading && groups.length === 0) {
+    dom.notificationsView.replaceChildren(
+      create("div", "empty", "現在表示できる通知はありません。"),
+    );
+    return;
   }
 
-  root.append(panel);
+  dom.notificationsView.replaceChildren(...orderedElements);
+}
 
-  if (state.selected) {
-    root.append(renderDialog(state.selected));
+function render(): void {
+  initView();
+  renderHeaderActions(state.view, state.loading);
+  renderGroups(state.groups);
+  renderDialogs(state.selected, state.confirm);
+
+  if (dom.error) {
+    dom.error.textContent = state.error;
+    dom.error.style.display = state.error ? "" : "none";
+  }
+}
+
+function renderGroupContent(group: UiNotificationGroup, groupIdx: number): HTMLElement[] {
+  const groupHeader = create("div", "group-header");
+  const groupTitleWrap = create("div", "group-title-wrap");
+  if (group.iconBase64) {
+    const icon = document.createElement("img");
+    icon.className = "group-icon";
+    icon.src = `data:image/png;base64,${group.iconBase64}`;
+    icon.alt = group.appName;
+    groupTitleWrap.append(icon);
+  }
+  const groupTitle = create(
+    "h2",
+    "group-title",
+    `${group.appName} (${group.notifications.length})`,
+  );
+  groupTitleWrap.append(groupTitle);
+
+  const groupActions = create("div", "group-actions");
+
+  const promptBtn = create("button", "group-clear-btn");
+  promptBtn.title = "このアプリのプロンプトを設定";
+  promptBtn.dataset.action = "open-group-prompt";
+  promptBtn.dataset.bundleId = group.bundleId;
+  promptBtn.innerHTML =
+    '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.33 2a1.89 1.89 0 0 1 2.67 2.67L5.33 13.33 1.33 14.67l1.34-4L11.33 2z"/></svg>';
+
+  const ignoreBtn = create("button", "group-clear-btn");
+  ignoreBtn.title = "このアプリを無視";
+  ignoreBtn.dataset.action = "ignore-app";
+  ignoreBtn.dataset.bundleId = group.bundleId;
+  ignoreBtn.innerHTML =
+    '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1l14 14"/><path d="M6.5 6.5a2 2 0 0 0 3 3"/><path d="M2.5 2.5C1.4 3.7.5 5.2.5 8c0 4.5 7.5 7 7.5 7s2.3-.8 4.5-2.5"/><path d="M14 11.2C15 9.8 15.5 8.5 15.5 8c0-4.5-7.5-7-7.5-7-.8.4-1.7 1-2.5 1.6"/></svg>';
+
+  const clearAppBtn = create("button", "group-clear-btn");
+  clearAppBtn.title = "このアプリをクリア";
+  clearAppBtn.dataset.action = "clear-app";
+  clearAppBtn.dataset.bundleId = group.bundleId;
+  clearAppBtn.innerHTML =
+    '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h12M5.33 4V2.67a1.33 1.33 0 0 1 1.34-1.34h2.66a1.33 1.33 0 0 1 1.34 1.34V4M6.67 7.33v4M9.33 7.33v4"/><path d="M3.33 4h9.34l-.67 9.33a1.33 1.33 0 0 1-1.33 1.34H5.33A1.33 1.33 0 0 1 4 13.33L3.33 4z"/></svg>';
+
+  groupActions.append(promptBtn, ignoreBtn, clearAppBtn);
+  groupHeader.append(groupTitleWrap, groupActions);
+
+  const cards = create("div", "cards");
+  let cardIdx = 0;
+  for (const notification of group.notifications) {
+    const card = renderCard(notification);
+    card.style.animationDelay = `${groupIdx * 0.06 + cardIdx * 0.03}s`;
+    cards.append(card);
+    cardIdx++;
   }
 
-  if (state.confirm) {
-    root.append(renderConfirmDialog(state.confirm));
+  return [groupHeader, cards];
+}
+
+function renderDialogs(
+  selected: UiNotification | null,
+  confirm: { message: string; okLabel?: string; onOk: () => void } | null,
+): void {
+  if (!dom.overlays) {
+    return;
   }
+
+  const overlays: HTMLElement[] = [];
+  if (selected) {
+    overlays.push(renderDialog(selected));
+  }
+  if (confirm) {
+    overlays.push(renderConfirmDialog(confirm));
+  }
+  dom.overlays.replaceChildren(...overlays);
 }
 
 function renderConfirmDialog(confirm: {
@@ -325,12 +623,7 @@ function renderConfirmDialog(confirm: {
   onOk: () => void;
 }): HTMLElement {
   const overlay = create("div", "overlay");
-  overlay.addEventListener("click", (event) => {
-    if (event.target === overlay) {
-      state.confirm = null;
-      render();
-    }
-  });
+  overlay.dataset.dismissOnBackdrop = "confirm";
 
   const dialog = create("article", "dialog");
   dialog.style.width = "min(360px, 88vw)";
@@ -342,16 +635,10 @@ function renderConfirmDialog(confirm: {
   actions.style.justifyContent = "flex-end";
 
   const cancelBtn = create("button", "btn secondary", "キャンセル");
-  cancelBtn.addEventListener("click", () => {
-    state.confirm = null;
-    render();
-  });
+  cancelBtn.dataset.action = "confirm-cancel";
 
   const okBtn = create("button", "btn warn", confirm.okLabel ?? "OK");
-  okBtn.addEventListener("click", () => {
-    state.confirm = null;
-    confirm.onOk();
-  });
+  okBtn.dataset.action = "confirm-ok";
 
   actions.append(cancelBtn, okBtn);
   dialog.append(msg, actions);
@@ -368,10 +655,8 @@ function renderCard(notification: UiNotification): HTMLElement {
 
   const openBtn = create("button", "card-main");
   openBtn.type = "button";
-  openBtn.addEventListener("click", () => {
-    state.selected = notification;
-    render();
-  });
+  openBtn.dataset.action = "open-notification";
+  openBtn.dataset.id = String(notification.id);
 
   const label = create("span", "card-label", notification.urgencyLabel);
   label.setAttribute("style", urgencyBadgeStyle(notification.urgencyColor));
@@ -390,20 +675,16 @@ function renderCard(notification: UiNotification): HTMLElement {
   const openAppBtn = create("button", "card-clear");
   openAppBtn.type = "button";
   openAppBtn.title = `アプリを開く: ${notification.bundleId}`;
+  openAppBtn.dataset.action = "open-app";
+  openAppBtn.dataset.bundleId = notification.bundleId;
   openAppBtn.innerHTML =
     '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2H2v12h12v-4"/><path d="M10 2h4v4"/><path d="M16 0L7 9"/></svg>';
-  openAppBtn.addEventListener("click", async (event) => {
-    event.stopPropagation();
-    await invokeCommand("open_app", { bundleId: notification.bundleId });
-  });
 
   const clearBtn = create("button", "card-clear", "×");
   clearBtn.type = "button";
   clearBtn.title = "この通知をクリア";
-  clearBtn.addEventListener("click", async (event) => {
-    event.stopPropagation();
-    await clearOne(notification.id);
-  });
+  clearBtn.dataset.action = "clear-one";
+  clearBtn.dataset.id = String(notification.id);
 
   const cardActions = create("div", "card-actions");
   cardActions.append(openAppBtn, clearBtn);
@@ -414,12 +695,7 @@ function renderCard(notification: UiNotification): HTMLElement {
 
 function renderDialog(notification: UiNotification): HTMLElement {
   const overlay = create("div", "overlay");
-  overlay.addEventListener("click", (event) => {
-    if (event.target === overlay) {
-      state.selected = null;
-      render();
-    }
-  });
+  overlay.dataset.dismissOnBackdrop = "selected";
 
   const dialog = create("article", "dialog");
   const title = create("h3", "dialog-title", notification.summaryLine);
@@ -446,28 +722,21 @@ function renderDialog(notification: UiNotification): HTMLElement {
   const actions = create("div", "dialog-actions");
   const closeBtn = create("button", "dialog-icon-btn", "←");
   closeBtn.title = "閉じる";
-  closeBtn.addEventListener("click", () => {
-    state.selected = null;
-    render();
-  });
+  closeBtn.dataset.action = "close-dialog";
 
   const openAppBtn = create("button", "dialog-icon-btn");
   openAppBtn.innerHTML =
     '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2H2v12h12v-4"/><path d="M10 2h4v4"/><path d="M16 0L7 9"/></svg>';
   openAppBtn.title = "アプリを開く";
-  openAppBtn.addEventListener("click", async () => {
-    await invokeCommand("open_app", { bundleId: notification.bundleId });
-  });
+  openAppBtn.dataset.action = "open-app";
+  openAppBtn.dataset.bundleId = notification.bundleId;
 
   const clearBtn = create("button", "dialog-icon-btn warn");
   clearBtn.innerHTML =
     '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h12M5.33 4V2.67a1.33 1.33 0 0 1 1.34-1.34h2.66a1.33 1.33 0 0 1 1.34 1.34V4M6.67 7.33v4M9.33 7.33v4"/><path d="M3.33 4h9.34l-.67 9.33a1.33 1.33 0 0 1-1.33 1.34H5.33A1.33 1.33 0 0 1 4 13.33L3.33 4z"/></svg>';
   clearBtn.title = "この通知をクリア";
-  clearBtn.addEventListener("click", async () => {
-    await clearOne(notification.id);
-    state.selected = null;
-    render();
-  });
+  clearBtn.dataset.action = "clear-one";
+  clearBtn.dataset.id = String(notification.id);
 
   actions.append(closeBtn, openAppBtn, clearBtn);
   dialog.append(title, meta, reasonTitle, reason, originalTitle, original, actions);
@@ -475,25 +744,22 @@ function renderDialog(notification: UiNotification): HTMLElement {
   return overlay;
 }
 
-function renderSettingsView(): HTMLElement {
-  const container = create("section", "groups");
+function renderSettingsView(container: HTMLElement): void {
+  const elements: HTMLElement[] = [];
 
   const addBtn = create("button", "icon-btn");
   addBtn.title = "プロンプトを追加";
+  addBtn.dataset.action = "settings-add-prompt";
   addBtn.innerHTML =
     '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1v14"/><path d="M1 8h14"/></svg>';
   addBtn.style.marginTop = "12px";
-  addBtn.addEventListener("click", () => {
-    state.editingPrompt = { bundleId: "", context: "", isNew: true };
-    render();
-  });
 
   if (state.editingPrompt) {
-    container.append(renderPromptForm(state.editingPrompt));
+    elements.push(renderPromptForm(state.editingPrompt));
   }
 
   if (state.prompts.length === 0 && !state.editingPrompt) {
-    container.append(
+    elements.push(
       create("div", "empty", "アプリプロンプトはまだ登録されていません。"),
     );
   }
@@ -506,24 +772,17 @@ function renderSettingsView(): HTMLElement {
     const rowActions = create("div", "panel-actions");
     const editBtn = create("button", "group-clear-btn");
     editBtn.title = "編集";
+    editBtn.dataset.action = "settings-edit-prompt";
+    editBtn.dataset.bundleId = prompt.bundleId;
     editBtn.innerHTML =
       '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.33 2a1.89 1.89 0 0 1 2.67 2.67L5.33 13.33 1.33 14.67l1.34-4L11.33 2z"/></svg>';
-    editBtn.addEventListener("click", () => {
-      state.editingPrompt = {
-        bundleId: prompt.bundleId,
-        context: prompt.context,
-        isNew: false,
-      };
-      render();
-    });
 
     const deleteBtn = create("button", "group-clear-btn");
     deleteBtn.title = "削除";
+    deleteBtn.dataset.action = "settings-delete-prompt";
+    deleteBtn.dataset.bundleId = prompt.bundleId;
     deleteBtn.innerHTML =
       '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h12M5.33 4V2.67a1.33 1.33 0 0 1 1.34-1.34h2.66a1.33 1.33 0 0 1 1.34 1.34V4M6.67 7.33v4M9.33 7.33v4"/><path d="M3.33 4h9.34l-.67 9.33a1.33 1.33 0 0 1-1.33 1.34H5.33A1.33 1.33 0 0 1 4 13.33L3.33 4z"/></svg>';
-    deleteBtn.addEventListener("click", async () => {
-      await deletePrompt(prompt.bundleId);
-    });
 
     rowActions.append(editBtn, deleteBtn);
     rowHeader.append(rowTitle, rowActions);
@@ -536,14 +795,13 @@ function renderSettingsView(): HTMLElement {
     contextPreview.style.margin = "4px 0 0";
 
     row.append(rowHeader, contextPreview);
-    container.append(row);
+    elements.push(row);
   }
 
   if (!state.editingPrompt) {
-    container.append(addBtn);
+    elements.push(addBtn);
   }
 
-  // Ignored apps section
   const ignoredSection = create("section", "group");
   ignoredSection.style.marginTop = "16px";
   const ignoredHeader = create("h2", "group-title", "無視アプリ");
@@ -561,18 +819,16 @@ function renderSettingsView(): HTMLElement {
     const label = create("span", "card-sub", bundleId);
     const unignoreBtn = create("button", "group-clear-btn");
     unignoreBtn.title = "無視を解除";
+    unignoreBtn.dataset.action = "settings-remove-ignored";
+    unignoreBtn.dataset.bundleId = bundleId;
     unignoreBtn.innerHTML =
       '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1l14 14"/><path d="M9.5 4a6 6 0 0 1 5.17 8.94"/><path d="M1.33 7.06A6 6 0 0 0 6.5 16"/><circle cx="8" cy="8" r="6"/></svg>';
-    unignoreBtn.addEventListener("click", async () => {
-      await removeIgnoredApp(bundleId);
-    });
     row.append(label, unignoreBtn);
     ignoredSection.append(row);
   }
 
-  container.append(ignoredSection);
-
-  return container;
+  elements.push(ignoredSection);
+  container.replaceChildren(...elements);
 }
 
 function renderPromptForm(editing: {
@@ -599,9 +855,7 @@ function renderPromptForm(editing: {
   bundleInput.value = editing.bundleId;
   bundleInput.placeholder = "com.example.app";
   bundleInput.disabled = !editing.isNew || editing.bundleId !== "";
-  bundleInput.addEventListener("input", () => {
-    editing.bundleId = bundleInput.value;
-  });
+  bundleInput.dataset.field = "bundle-id";
 
   const contextLabel = create("label", "card-sub", "コンテキスト");
   contextLabel.style.display = "block";
@@ -611,34 +865,21 @@ function renderPromptForm(editing: {
   contextInput.value = editing.context;
   contextInput.placeholder = "このアプリに関する追加コンテキストを入力…";
   contextInput.rows = 3;
-  contextInput.addEventListener("input", () => {
-    editing.context = contextInput.value;
-  });
+  contextInput.dataset.field = "context";
 
   const actions = create("div", "panel-actions");
   actions.style.marginTop = "8px";
   const saveBtn = create("button", "icon-btn");
   saveBtn.title = "保存";
+  saveBtn.dataset.action = "settings-save-prompt";
   saveBtn.innerHTML =
     '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8.5l3.5 3.5 7.5-8"/></svg>';
-  saveBtn.addEventListener("click", async () => {
-    if (!editing.bundleId.trim() || !editing.context.trim()) {
-      state.error = "Bundle ID とコンテキストは必須です。";
-      render();
-      return;
-    }
-    await savePrompt(editing.bundleId.trim(), editing.context.trim());
-    state.editingPrompt = null;
-  });
 
   const cancelBtn = create("button", "icon-btn");
   cancelBtn.title = "キャンセル";
+  cancelBtn.dataset.action = "settings-cancel-prompt";
   cancelBtn.innerHTML =
     '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l10 10"/><path d="M13 3L3 13"/></svg>';
-  cancelBtn.addEventListener("click", () => {
-    state.editingPrompt = null;
-    render();
-  });
 
   actions.append(saveBtn, cancelBtn);
   form.append(
@@ -730,6 +971,7 @@ async function clearOne(id: number): Promise<void> {
     state.error = "";
     await invokeCommand<boolean>("clear_notification", { id });
     await loadGroups();
+    assertRootFrameStable();
   } catch (error) {
     state.error = (error as Error).message;
     render();
@@ -741,6 +983,7 @@ async function clearApp(bundleId: string): Promise<void> {
     state.error = "";
     await invokeCommand<number>("clear_app_notifications", { bundleId });
     await loadGroups();
+    assertRootFrameStable();
   } catch (error) {
     state.error = (error as Error).message;
     render();
@@ -752,6 +995,7 @@ async function clearAll(): Promise<boolean> {
     state.error = "";
     await invokeCommand<number>("clear_all_notifications");
     await loadGroups();
+    assertRootFrameStable();
     return true;
   } catch (error) {
     state.error = (error as Error).message;
