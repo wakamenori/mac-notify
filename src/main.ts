@@ -237,6 +237,7 @@ function initView(): void {
         if (state.view === "notifications") {
           state.view = "settings";
           state.editingPrompt = null;
+          render();
           void loadPrompts();
         } else {
           state.view = "notifications";
