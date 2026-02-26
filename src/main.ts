@@ -1039,15 +1039,6 @@ async function injectDummy(): Promise<void> {
 }
 
 async function setupEventListener(): Promise<void> {
-  const listen = window.__TAURI__?.event?.listen;
-  if (!listen) {
-    return;
-  }
-
-  await listen("notifications-updated", () => {
-    void loadGroups();
-  });
-
   const onActivate = () => {
     resetUiToMainViewAndRender();
   };
@@ -1057,6 +1048,15 @@ async function setupEventListener(): Promise<void> {
     if (!document.hidden) {
       onActivate();
     }
+  });
+
+  const listen = window.__TAURI__?.event?.listen;
+  if (!listen) {
+    return;
+  }
+
+  await listen("notifications-updated", () => {
+    void loadGroups();
   });
 }
 
