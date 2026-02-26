@@ -85,6 +85,19 @@ const state: {
   confirm: null,
 };
 
+function resetUiToMainView(): void {
+  state.view = "notifications";
+  state.selected = null;
+  state.editingPrompt = null;
+  state.confirm = null;
+  state.error = "";
+}
+
+function resetUiToMainViewAndRender(): void {
+  resetUiToMainView();
+  render();
+}
+
 async function invokeCommand<T>(
   command: string,
   args?: Record<string, unknown>,
@@ -788,6 +801,17 @@ async function setupEventListener(): Promise<void> {
 
   await listen("notifications-updated", () => {
     void loadGroups();
+  });
+
+  const onActivate = () => {
+    resetUiToMainViewAndRender();
+  };
+
+  window.addEventListener("focus", onActivate);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      onActivate();
+    }
   });
 }
 
