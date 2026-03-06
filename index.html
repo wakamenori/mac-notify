@@ -166,6 +166,11 @@
         transform: scale(0.97);
       }
 
+      .btn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+
       .btn.secondary {
         background: var(--bg-btn);
       }
@@ -281,6 +286,12 @@
       .group-clear-btn:hover {
         background: rgba(255, 255, 255, 0.06);
         color: var(--ink-2);
+      }
+
+      .group-clear-btn:disabled,
+      .icon-btn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
       }
 
       /* ─── Cards ─── */
@@ -530,6 +541,11 @@
         color: var(--ink-1);
         resize: vertical;
         transition: all 0.15s ease;
+      }
+
+      .prompt-select {
+        appearance: none;
+        cursor: pointer;
       }
 
       .prompt-input:focus,

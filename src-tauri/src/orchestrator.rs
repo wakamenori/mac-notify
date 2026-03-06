@@ -10,8 +10,8 @@ use log::{error, warn};
 use crate::db::{get_notification_db_path, NotificationDb};
 use crate::focus::{get_focus_assertions_path, FocusModeDetector};
 use crate::llm::{
-    build_analysis_prompt, fallback_analysis, parse_analysis_response, AppPrompts, IgnoredApps,
-    LlmClient, OLLAMA_BASE_URL,
+    build_analysis_prompt, fallback_analysis, fallback_analysis_with_reason,
+    parse_analysis_response, AppPrompts, IgnoredApps, LlmClient, OLLAMA_BASE_URL,
 };
 use crate::models::{
     AnalyzedNotification, FocusState, Notification, NotificationAnalysis, UiNotification,
@@ -378,7 +378,19 @@ fn analyze_single(
             Some(parsed) => return parsed,
             None => warn!("analysis response parse failed for {}", notification.rowid),
         },
-        Err(err) => warn!("notification analysis failed: {err:#}"),
+        Err(err) => {
+            warn!("notification analysis failed: {err:#}");
+            let detail = err.to_string().to_lowercase();
+            if detail.contains("timed out") || detail.contains("timeout") {
+                return fallback_analysis_with_reason(
+                    notification,
+                    format!(
+                        "Ollama モデル `{}` の応答がタイムアウトしたため、中優先として扱いました。",
+                        llm.current_model()
+                    ),
+                );
+            }
+        }
     }
 
     fallback_analysis(notification)

@@ -21,10 +21,11 @@ use tauri::{
 
 use commands::{
     add_ignored_app, clear_all_notifications, clear_app_notifications, clear_notification,
-    delete_app_prompt, get_app_prompts, get_ignored_apps, get_notification_groups,
-    hide_main_window, inject_dummy_notifications, open_app, remove_ignored_app, set_app_prompt,
+    delete_app_prompt, get_app_prompts, get_ignored_apps, get_llm_settings,
+    get_notification_groups, hide_main_window, inject_dummy_notifications, open_app,
+    remove_ignored_app, set_app_prompt, set_llm_model,
 };
-use llm::LlmClient;
+use llm::{LlmClient, SharedLlm};
 use orchestrator::{
     analyze_notifications_batch, NotifyOrchestrator, SharedOrchestrator, POLL_INTERVAL_SECONDS,
 };
@@ -390,6 +391,7 @@ fn main() {
     };
 
     tauri::Builder::default()
+        .manage(SharedLlm(llm.clone()))
         .manage(SharedOrchestrator(orchestrator))
         .invoke_handler(tauri::generate_handler![
             get_notification_groups,
@@ -403,6 +405,8 @@ fn main() {
             get_ignored_apps,
             add_ignored_app,
             remove_ignored_app,
+            get_llm_settings,
+            set_llm_model,
             hide_main_window,
             open_app
         ])
