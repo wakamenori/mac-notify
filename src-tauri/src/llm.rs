@@ -1,12 +1,15 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use log::warn;
 use reqwest::blocking::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::models::{Notification, NotificationAnalysis, UrgencyLevel};
@@ -154,28 +157,140 @@ impl IgnoredApps {
     }
 }
 
-const LLM_MODEL: &str = "qwen3:8b";
+const LLM_MODEL: &str = "qwen3.5:latest";
+const LLM_REQUEST_TIMEOUT_SECONDS: u64 = 180;
+const OLLAMA_CONNECT_TIMEOUT_SECONDS: u64 = 2;
+const LLM_MAX_OUTPUT_TOKENS: u64 = 160;
 pub const OLLAMA_BASE_URL: &str = "http://localhost:11434";
+
+#[derive(Debug, Deserialize, Serialize)]
+struct LlmSettings {
+    model: String,
+}
+
+impl Default for LlmSettings {
+    fn default() -> Self {
+        Self {
+            model: LLM_MODEL.to_string(),
+        }
+    }
+}
+
+impl LlmSettings {
+    fn load(path: &Path) -> Self {
+        match fs::read_to_string(path) {
+            Ok(content) => match serde_json::from_str::<LlmSettings>(&content) {
+                Ok(parsed) => parsed,
+                Err(err) => {
+                    warn!("Failed to parse llm_settings.json: {err:#}");
+                    Self::default()
+                }
+            },
+            Err(_) => Self::default(),
+        }
+    }
+
+    fn save(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_string_pretty(self)?;
+        fs::write(path, json)?;
+        Ok(())
+    }
+}
+
+fn notify_config_dir() -> PathBuf {
+    env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default()
+        .join(".config/notify")
+}
+
+#[derive(Clone)]
+pub struct SharedLlm(pub Arc<LlmClient>);
 
 pub struct LlmClient {
     client: Client,
-    available: bool,
+    model: Mutex<String>,
+    settings_path: PathBuf,
 }
 
 impl LlmClient {
     pub fn new() -> Self {
         let client = Client::builder()
-            .timeout(Duration::from_secs(60))
+            .connect_timeout(Duration::from_secs(OLLAMA_CONNECT_TIMEOUT_SECONDS))
+            .timeout(Duration::from_secs(LLM_REQUEST_TIMEOUT_SECONDS))
             .build()
             .expect("failed to build reqwest client");
 
-        let available = client.get(OLLAMA_BASE_URL).send().is_ok();
+        let settings_path = notify_config_dir().join("llm_settings.json");
+        let settings = LlmSettings::load(&settings_path);
 
-        Self { client, available }
+        Self {
+            client,
+            model: Mutex::new(settings.model),
+            settings_path,
+        }
     }
 
     pub fn can_use(&self) -> bool {
-        self.available
+        self.client.get(OLLAMA_BASE_URL).send().is_ok()
+    }
+
+    pub fn current_model(&self) -> String {
+        self.model
+            .lock()
+            .map(|model| model.clone())
+            .unwrap_or_else(|_| LLM_MODEL.to_string())
+    }
+
+    pub fn list_models(&self) -> Result<Vec<String>> {
+        let output = Command::new("ollama")
+            .arg("list")
+            .output()
+            .context("failed to execute `ollama list`")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("`ollama list` failed: {}", stderr.trim());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let models = stdout
+            .lines()
+            .skip(1)
+            .filter_map(|line| line.split_whitespace().next())
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(ToString::to_string)
+            .collect();
+
+        Ok(models)
+    }
+
+    pub fn set_model(&self, model: String) -> Result<()> {
+        let model = model.trim();
+        if model.is_empty() {
+            bail!("Model name is required")
+        }
+
+        let available_models = self.list_models()?;
+        if !available_models.iter().any(|candidate| candidate == model) {
+            bail!("Model `{model}` is not installed in Ollama")
+        }
+
+        let settings = LlmSettings {
+            model: model.to_string(),
+        };
+        settings.save(&self.settings_path)?;
+
+        let mut current = self
+            .model
+            .lock()
+            .map_err(|err| anyhow::anyhow!("model state lock error: {err}"))?;
+        *current = model.to_string();
+        Ok(())
     }
 
     pub fn generate_text(&self, prompt: &str) -> Result<String> {
@@ -184,18 +299,28 @@ impl LlmClient {
         }
 
         let endpoint = format!("{OLLAMA_BASE_URL}/api/generate");
+        let model = self.current_model();
 
         let response: Value = self
             .client
             .post(endpoint)
             .json(&json!({
-                "model": LLM_MODEL,
+                "model": model,
                 "prompt": prompt,
-                "stream": false
+                "stream": false,
+                "format": "json",
+                "think": false,
+                "options": {
+                    "num_predict": LLM_MAX_OUTPUT_TOKENS,
+                    "temperature": 0
+                }
             }))
-            .send()?
-            .error_for_status()?
-            .json()?;
+            .send()
+            .with_context(|| format!("request to Ollama model `{model}` failed"))?
+            .error_for_status()
+            .with_context(|| format!("Ollama model `{model}` returned an error status"))?
+            .json()
+            .with_context(|| format!("failed to parse Ollama response for model `{model}`"))?;
 
         let text = response
             .get("response")
@@ -301,10 +426,20 @@ pub fn parse_analysis_response(
 }
 
 pub fn fallback_analysis(notification: &Notification) -> NotificationAnalysis {
+    fallback_analysis_with_reason(
+        notification,
+        "LLM分析に失敗したため、ローカル規則で中優先として扱いました。".to_string(),
+    )
+}
+
+pub fn fallback_analysis_with_reason(
+    notification: &Notification,
+    reason: String,
+) -> NotificationAnalysis {
     NotificationAnalysis {
         urgency: UrgencyLevel::Medium,
         summary_line: default_summary_line(notification),
-        reason: "LLM分析に失敗したため、ローカル規則で中優先として扱いました。".to_string(),
+        reason,
     }
 }
 

@@ -3,6 +3,11 @@ type AppPromptEntry = {
   context: string;
 };
 
+type LlmSettings = {
+  selectedModel: string;
+  models: string[];
+};
+
 type UrgencyLevel = "critical" | "high" | "medium" | "low";
 
 type UiNotification = {
@@ -72,6 +77,8 @@ const state: {
   prompts: AppPromptEntry[];
   editingPrompt: { bundleId: string; context: string; isNew: boolean } | null;
   ignoredApps: string[];
+  llmModels: string[];
+  selectedLlmModel: string;
   confirm: { message: string; okLabel?: string; onOk: () => void } | null;
 } = {
   groups: [],
@@ -82,6 +89,8 @@ const state: {
   prompts: [],
   editingPrompt: null,
   ignoredApps: [],
+  llmModels: [],
+  selectedLlmModel: "",
   confirm: null,
 };
 
@@ -251,7 +260,7 @@ function initView(): void {
           state.view = "settings";
           state.editingPrompt = null;
           render();
-          void loadPrompts();
+          void loadSettings();
         } else {
           state.view = "notifications";
           render();
@@ -286,7 +295,7 @@ function initView(): void {
         void (async () => {
           state.view = "settings";
           state.error = "";
-          await loadPrompts();
+          await loadSettings();
           const existing = state.prompts.find((p) => p.bundleId === bundleId);
           state.editingPrompt = {
             bundleId,
@@ -361,6 +370,9 @@ function initView(): void {
           void removeIgnoredApp(bundleId);
         }
         break;
+      case "settings-refresh-models":
+        void loadSettings();
+        break;
       case "settings-save-prompt": {
         const editing = state.editingPrompt;
         if (!editing) {
@@ -378,6 +390,14 @@ function initView(): void {
         })();
         break;
       }
+      case "settings-save-model":
+        if (!state.selectedLlmModel) {
+          state.error = "利用するモデルを選択してください。";
+          render();
+          break;
+        }
+        void saveLlmModel(state.selectedLlmModel);
+        break;
       case "settings-cancel-prompt":
         state.editingPrompt = null;
         render();
@@ -399,6 +419,15 @@ function initView(): void {
     }
     if (target.dataset.field === "context") {
       state.editingPrompt.context = target.value;
+    }
+  });
+  root.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLSelectElement)) {
+      return;
+    }
+    if (target.dataset.field === "llm-model") {
+      state.selectedLlmModel = target.value;
     }
   });
 }
@@ -761,6 +790,8 @@ function renderDialog(notification: UiNotification): HTMLElement {
 function renderSettingsView(container: HTMLElement): void {
   const elements: HTMLElement[] = [];
 
+  elements.push(renderLlmSettingsSection());
+
   const addBtn = create("button", "icon-btn");
   addBtn.title = "プロンプトを追加";
   addBtn.dataset.action = "settings-add-prompt";
@@ -845,6 +876,82 @@ function renderSettingsView(container: HTMLElement): void {
   container.replaceChildren(...elements);
 }
 
+function renderLlmSettingsSection(): HTMLElement {
+  const section = create("section", "group");
+
+  const header = create("div", "group-header");
+  const titleWrap = create("div");
+  const title = create("h2", "group-title", "LLM モデル");
+  const hint = create(
+    "p",
+    "card-sub",
+    "Ollama にダウンロード済みのモデルから選択します。",
+  );
+  hint.style.margin = "4px 0 0";
+  titleWrap.append(title, hint);
+
+  const refreshBtn = create("button", "group-clear-btn");
+  refreshBtn.title = "モデル一覧を更新";
+  refreshBtn.dataset.action = "settings-refresh-models";
+  refreshBtn.innerHTML =
+    '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.33 1.33v4.67h4.67"/><path d="M2.34 10a6 6 0 1 0 1.16-6.52L1.33 6"/></svg>';
+
+  header.append(titleWrap, refreshBtn);
+  section.append(header);
+
+  const modelLabel = create("label", "card-sub", "使用モデル");
+  modelLabel.style.display = "block";
+  modelLabel.style.margin = "4px 0 6px";
+
+  const select = document.createElement("select");
+  select.className = "prompt-input prompt-select";
+  select.dataset.field = "llm-model";
+
+  const models = Array.from(
+    new Set(
+      state.selectedLlmModel
+        ? [state.selectedLlmModel, ...state.llmModels]
+        : state.llmModels,
+    ),
+  );
+
+  if (models.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "利用可能なモデルが見つかりません";
+    select.append(option);
+    select.disabled = true;
+  } else {
+    for (const model of models) {
+      const isInstalled = state.llmModels.includes(model);
+      const option = document.createElement("option");
+      option.value = model;
+      option.textContent = isInstalled ? model : `${model} (未検出)`;
+      option.selected = model === state.selectedLlmModel;
+      select.append(option);
+    }
+  }
+
+  const current = create(
+    "p",
+    "card-sub",
+    state.selectedLlmModel
+      ? `現在の設定: ${state.selectedLlmModel}`
+      : "現在の設定はまだありません。",
+  );
+  current.style.margin = "8px 0 0";
+
+  const actions = create("div", "panel-actions");
+  actions.style.marginTop = "10px";
+  const saveBtn = create("button", "btn", "このモデルを使う");
+  saveBtn.dataset.action = "settings-save-model";
+  saveBtn.toggleAttribute("disabled", models.length === 0);
+  actions.append(saveBtn);
+
+  section.append(modelLabel, select, current, actions);
+  return section;
+}
+
 function renderPromptForm(editing: {
   bundleId: string;
   context: string;
@@ -907,10 +1014,18 @@ function renderPromptForm(editing: {
   return form;
 }
 
-async function loadPrompts(): Promise<void> {
+async function loadSettings(): Promise<void> {
   try {
-    state.prompts = await invokeCommand<AppPromptEntry[]>("get_app_prompts");
-    state.ignoredApps = await invokeCommand<string[]>("get_ignored_apps");
+    state.error = "";
+    const [prompts, ignoredApps, llmSettings] = await Promise.all([
+      invokeCommand<AppPromptEntry[]>("get_app_prompts"),
+      invokeCommand<string[]>("get_ignored_apps"),
+      invokeCommand<LlmSettings>("get_llm_settings"),
+    ]);
+    state.prompts = prompts;
+    state.ignoredApps = ignoredApps;
+    state.llmModels = llmSettings.models;
+    state.selectedLlmModel = llmSettings.selectedModel;
   } catch (error) {
     state.error = (error as Error).message;
   }
@@ -924,7 +1039,7 @@ async function savePrompt(
   try {
     state.error = "";
     await invokeCommand("set_app_prompt", { bundleId, context });
-    await loadPrompts();
+    await loadSettings();
   } catch (error) {
     state.error = (error as Error).message;
     render();
@@ -935,7 +1050,7 @@ async function deletePrompt(bundleId: string): Promise<void> {
   try {
     state.error = "";
     await invokeCommand("delete_app_prompt", { bundleId });
-    await loadPrompts();
+    await loadSettings();
   } catch (error) {
     state.error = (error as Error).message;
     render();
@@ -957,7 +1072,18 @@ async function removeIgnoredApp(bundleId: string): Promise<void> {
   try {
     state.error = "";
     await invokeCommand("remove_ignored_app", { bundleId });
-    await loadPrompts();
+    await loadSettings();
+  } catch (error) {
+    state.error = (error as Error).message;
+    render();
+  }
+}
+
+async function saveLlmModel(model: string): Promise<void> {
+  try {
+    state.error = "";
+    await invokeCommand("set_llm_model", { model });
+    await loadSettings();
   } catch (error) {
     state.error = (error as Error).message;
     render();

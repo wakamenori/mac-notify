@@ -2,6 +2,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
 use crate::emit_notifications_updated;
+use crate::llm::SharedLlm;
 use crate::models::UiNotificationGroup;
 use crate::orchestrator::{SharedOrchestrator, MAX_DUMMY_INSERT_COUNT};
 
@@ -10,6 +11,13 @@ pub struct AppPromptEntry {
     #[serde(rename = "bundleId")]
     pub bundle_id: String,
     pub context: String,
+}
+
+#[derive(Serialize)]
+pub struct LlmSettingsResponse {
+    #[serde(rename = "selectedModel")]
+    pub selected_model: String,
+    pub models: Vec<String>,
 }
 
 #[tauri::command]
@@ -194,4 +202,25 @@ pub fn remove_ignored_app(
     guard
         .remove_ignored_app(&bundle_id)
         .map_err(|err| format!("failed to remove ignored app: {err}"))
+}
+
+#[tauri::command]
+pub fn get_llm_settings(llm: State<'_, SharedLlm>) -> Result<LlmSettingsResponse, String> {
+    let selected_model = llm.0.current_model();
+    let models = llm
+        .0
+        .list_models()
+        .map_err(|err| format!("failed to list Ollama models: {err}"))?;
+
+    Ok(LlmSettingsResponse {
+        selected_model,
+        models,
+    })
+}
+
+#[tauri::command]
+pub fn set_llm_model(model: String, llm: State<'_, SharedLlm>) -> Result<(), String> {
+    llm.0
+        .set_model(model)
+        .map_err(|err| format!("failed to save LLM model: {err}"))
 }
