@@ -14,6 +14,10 @@ use serde_json::{json, Value};
 
 use crate::models::{Notification, NotificationAnalysis, UrgencyLevel};
 
+const SLACK_BUNDLE_ID: &str = "com.tinyspeck.slackmacgap";
+const SLACK_NEW_MESSAGE_SUFFIX: &str = " の新しいメッセージ";
+const SLACK_INTEGRATION_SUFFIX: &str = " からの新しいメッセージ";
+
 #[derive(Debug, Deserialize)]
 pub struct AppPromptConfig {
     pub context: String,
@@ -346,8 +350,80 @@ fn strip_thinking_tags(text: &str) -> String {
     re.replace_all(text, "").trim().to_string()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PromptNotificationKind {
+    Raw,
+    SlackChannelMessage,
+    SlackIntegrationNotification,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PromptNotificationView {
+    kind: PromptNotificationKind,
+    title: String,
+    subtitle: String,
+    body: String,
+    detail_lines: Vec<String>,
+}
+
+fn build_prompt_notification_view(notification: &Notification) -> PromptNotificationView {
+    if notification.bundle_id == SLACK_BUNDLE_ID {
+        if let Some(view) = build_slack_prompt_view(notification) {
+            return view;
+        }
+    }
+
+    PromptNotificationView {
+        kind: PromptNotificationKind::Raw,
+        title: notification.title.clone(),
+        subtitle: notification.subtitle.clone(),
+        body: notification.body.clone(),
+        detail_lines: Vec::new(),
+    }
+}
+
+fn build_slack_prompt_view(notification: &Notification) -> Option<PromptNotificationView> {
+    let title = notification.title.trim();
+    let body = notification.body.trim();
+    let subtitle = notification.subtitle.trim();
+
+    if let Some(conversation_name) = title.strip_suffix(SLACK_NEW_MESSAGE_SUFFIX) {
+        if let Some((sender, message_text)) = body.split_once(": ") {
+            return Some(PromptNotificationView {
+                kind: PromptNotificationKind::SlackChannelMessage,
+                title: title.to_string(),
+                subtitle: subtitle.to_string(),
+                body: body.to_string(),
+                detail_lines: vec![
+                    "通知種別: slack_channel_message".to_string(),
+                    format!("会話名: {}", conversation_name.trim()),
+                    format!("送信者表示名: {}", sender.trim()),
+                    format!("メッセージ本文: {}", message_text.trim()),
+                ],
+            });
+        }
+    }
+
+    if let Some(source_name) = title.strip_suffix(SLACK_INTEGRATION_SUFFIX) {
+        return Some(PromptNotificationView {
+            kind: PromptNotificationKind::SlackIntegrationNotification,
+            title: title.to_string(),
+            subtitle: subtitle.to_string(),
+            body: body.to_string(),
+            detail_lines: vec![
+                "通知種別: slack_integration_notification".to_string(),
+                format!("通知元表示名: {}", source_name.trim()),
+                format!("通知本文: {body}"),
+            ],
+        });
+    }
+
+    None
+}
+
 pub fn build_analysis_prompt(notification: &Notification, app_context: Option<&str>) -> String {
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S (%a)");
+    let prompt_view = build_prompt_notification_view(notification);
     let mut prompt = format!(
         "現在日時: {now}\\n\\n\
 以下の通知を分析してください。\\n\
@@ -373,8 +449,16 @@ summary_lineの例:\\n\
 タイトル: {}\\n\
 サブタイトル: {}\\n\
 本文: {}",
-        notification.bundle_id, notification.title, notification.subtitle, notification.body
+        notification.bundle_id, prompt_view.title, prompt_view.subtitle, prompt_view.body
     );
+
+    if !prompt_view.detail_lines.is_empty() {
+        prompt.push_str("\\n");
+        for line in &prompt_view.detail_lines {
+            prompt.push_str("\\n");
+            prompt.push_str(line);
+        }
+    }
 
     if let Some(ctx) = app_context {
         prompt.push_str(&format!("\\n\\nこのアプリに関する追加コンテキスト: {ctx}"));
@@ -463,4 +547,75 @@ fn truncate_chars(s: &str, max: usize) -> String {
         chars.push('…');
     }
     chars
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_analysis_prompt, build_prompt_notification_view, PromptNotificationKind,
+        SLACK_BUNDLE_ID,
+    };
+    use crate::models::Notification;
+
+    fn sample_notification(title: &str, body: &str) -> Notification {
+        Notification {
+            rowid: 1,
+            title: title.to_string(),
+            body: body.to_string(),
+            subtitle: String::new(),
+            bundle_id: SLACK_BUNDLE_ID.to_string(),
+            timestamp: 0,
+        }
+    }
+
+    #[test]
+    fn slack_channel_message_is_preprocessed_for_prompt() {
+        let notification = sample_notification(
+            "#ns_zatsu の新しいメッセージ",
+            "Jo Okazaki（ジョー）: ほしくなる",
+        );
+
+        let view = build_prompt_notification_view(&notification);
+
+        assert_eq!(view.kind, PromptNotificationKind::SlackChannelMessage);
+        assert!(view
+            .detail_lines
+            .contains(&"会話名: #ns_zatsu".to_string()));
+        assert!(view
+            .detail_lines
+            .contains(&"送信者表示名: Jo Okazaki（ジョー）".to_string()));
+        assert!(view.detail_lines.contains(&"メッセージ本文: ほしくなる".to_string()));
+    }
+
+    #[test]
+    fn slack_integration_message_is_preprocessed_for_prompt() {
+        let notification = sample_notification(
+            "バクラク勤怠 からの新しいメッセージ",
+            "勤怠エラーが4日分あります",
+        );
+
+        let view = build_prompt_notification_view(&notification);
+
+        assert_eq!(view.kind, PromptNotificationKind::SlackIntegrationNotification);
+        assert!(view
+            .detail_lines
+            .contains(&"通知元表示名: バクラク勤怠".to_string()));
+    }
+
+    #[test]
+    fn prompt_keeps_original_fields_and_adds_preprocessed_slack_details() {
+        let notification = sample_notification(
+            "#ns_zatsu の新しいメッセージ",
+            "Jo Okazaki（ジョー）: ほしくなる",
+        );
+
+        let prompt = build_analysis_prompt(&notification, Some("Slackワークスペースの社内連絡"));
+
+        assert!(prompt.contains("タイトル: #ns_zatsu の新しいメッセージ"));
+        assert!(prompt.contains("本文: Jo Okazaki（ジョー）: ほしくなる"));
+        assert!(prompt.contains("通知種別: slack_channel_message"));
+        assert!(prompt.contains("送信者表示名: Jo Okazaki（ジョー）"));
+        assert!(prompt.contains("メッセージ本文: ほしくなる"));
+        assert!(prompt.contains("このアプリに関する追加コンテキスト: Slackワークスペースの社内連絡"));
+    }
 }
