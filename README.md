@@ -15,20 +15,19 @@ macOS の集中モード中に通知を収集し、メニューバー常駐で�
 - `Tauri` (Rust backend)
 - `TypeScript + Vite` (frontend shell)
 - `rusqlite` (Notification DB 読み取り)
-- `reqwest` + Ollama (既定: Qwen3.5、設定画面で切替可能なローカル LLM 緊急度判定)
+- Codex CLI (reasoning effort: low で通知の緊急度判定)
 
 ## 必須条件
 
 - macOS 15 (Tahoe) 以上
 - フルディスクアクセス（Terminal / iTerm 等）
-- [Ollama](https://ollama.com/) がインストール済みで `ollama serve` が起動していること
-- `ollama pull qwen3.5:latest` などで利用したいモデルがダウンロード済みであること
+- Codex CLI がインストール済みで、必要に応じて `codex login` 済みであること
 
-## LLM モデル設定
+## LLM 設定
 
-- 初期値は `qwen3.5:latest`
-- アプリの設定画面から、`ollama list` に表示されるローカルモデルを選択可能
-- モデルのダウンロード自体はアプリでは行わず、事前に Ollama CLI で追加する
+- 通知分析は `codex exec` で実行する
+- reasoning effort は `low` 固定
+- 設定画面では Codex CLI の利用状態を確認できる
 
 ## 開発
 
@@ -46,4 +45,4 @@ npm run tauri:build
 ## 補足
 
 - 旧 Python 実装から Tauri 実装へ移行済み。
-- Ollama が起動していない場合、通知分析はフォールバック（中優先）で動作します。
+- Codex CLI を利用できない場合、通知分析はフォールバック（中優先）で動作します。

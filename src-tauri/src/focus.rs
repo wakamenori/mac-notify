@@ -1,10 +1,14 @@
 use std::env;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
 use log::warn;
 use serde_json::Value;
 
+use crate::app_log;
 use crate::models::FocusState;
+
+static LAST_FOCUS_ERROR: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 
 pub struct FocusModeDetector {
     assertions_path: PathBuf,
@@ -24,6 +28,10 @@ impl FocusModeDetector {
                     self.assertions_path.display(),
                     err
                 );
+                log_focus_error_once(format!(
+                    "focus assertions read failed path={} error={err}",
+                    self.assertions_path.display()
+                ));
                 return FocusState::Inactive;
             }
         };
@@ -36,6 +44,10 @@ impl FocusModeDetector {
                     self.assertions_path.display(),
                     err
                 );
+                log_focus_error_once(format!(
+                    "focus assertions parse failed path={} error={err}",
+                    self.assertions_path.display()
+                ));
                 return FocusState::Inactive;
             }
         };
@@ -46,6 +58,19 @@ impl FocusModeDetector {
             FocusState::Inactive
         }
     }
+}
+
+fn log_focus_error_once(message: String) {
+    let lock = LAST_FOCUS_ERROR.get_or_init(|| Mutex::new(None));
+    let Ok(mut last) = lock.lock() else {
+        app_log::warn(message);
+        return;
+    };
+    if last.as_deref() == Some(message.as_str()) {
+        return;
+    }
+    *last = Some(message.clone());
+    app_log::warn(message);
 }
 
 fn is_focus_active(data: &Value) -> bool {
