@@ -3,14 +3,14 @@
 ## プロジェクト概要
 
 macOS の集中モード中に通知を収集し、タスク終了時に要約表示するメニューバー常駐トレイアプリ。
-緊急通知は Ollama 上の選択中モデル（既定: Qwen3.5）で判定し、集中モード中でも即時アラートを出す。
+緊急通知は Codex CLI（reasoning effort: low）で判定し、集中モード中でも即時アラートを出す。
 
 ## 技術スタック
 
 - Rust（バックエンド） + TypeScript（フロントエンド）
 - Tauri v2（トレイアプリフレームワーク）
 - Vite（フロントエンドビルド）
-- Ollama + 選択可能なローカル LLM（既定: Qwen3.5、設定画面で切替）
+- Codex CLI（reasoning effort: low）
 - rusqlite（macOS 通知センター DB 読み取り）
 
 ## ディレクトリ構成
@@ -23,7 +23,7 @@ src-tauri/          # Rust バックエンド
     commands.rs     # Tauri コマンド
     db.rs           # SQLite 操作
     focus.rs        # 集中モード検知
-    llm.rs          # LLM 連携 (Ollama)
+    llm.rs          # LLM 連携 (Codex CLI)
     models.rs       # データモデル
     orchestrator.rs # オーケストレーション
 scripts/            # ユーティリティスクリプト

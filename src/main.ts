@@ -79,6 +79,8 @@ const state: {
   ignoredApps: string[];
   llmModels: string[];
   selectedLlmModel: string;
+  userContext: string;
+  editingUserContext: boolean;
   confirm: { message: string; okLabel?: string; onOk: () => void } | null;
 } = {
   groups: [],
@@ -91,6 +93,8 @@ const state: {
   ignoredApps: [],
   llmModels: [],
   selectedLlmModel: "",
+  userContext: "",
+  editingUserContext: false,
   confirm: null,
 };
 
@@ -390,16 +394,25 @@ function initView(): void {
         })();
         break;
       }
-      case "settings-save-model":
-        if (!state.selectedLlmModel) {
-          state.error = "利用するモデルを選択してください。";
-          render();
-          break;
-        }
-        void saveLlmModel(state.selectedLlmModel);
-        break;
       case "settings-cancel-prompt":
         state.editingPrompt = null;
+        render();
+        break;
+      case "settings-edit-user-context":
+        state.editingUserContext = true;
+        render();
+        break;
+      case "settings-save-user-context": {
+        const textarea = root.querySelector<HTMLTextAreaElement>(
+          '[data-field="user-context"]',
+        );
+        if (textarea) {
+          void saveUserContext(textarea.value.trim());
+        }
+        break;
+      }
+      case "settings-cancel-user-context":
+        state.editingUserContext = false;
         render();
         break;
       default:
@@ -425,9 +438,6 @@ function initView(): void {
     const target = event.target;
     if (!(target instanceof HTMLSelectElement)) {
       return;
-    }
-    if (target.dataset.field === "llm-model") {
-      state.selectedLlmModel = target.value;
     }
   });
 }
@@ -791,6 +801,7 @@ function renderSettingsView(container: HTMLElement): void {
   const elements: HTMLElement[] = [];
 
   elements.push(renderLlmSettingsSection());
+  elements.push(renderUserContextSection());
 
   const addBtn = create("button", "icon-btn");
   addBtn.title = "プロンプトを追加";
@@ -881,17 +892,17 @@ function renderLlmSettingsSection(): HTMLElement {
 
   const header = create("div", "group-header");
   const titleWrap = create("div");
-  const title = create("h2", "group-title", "LLM モデル");
+  const title = create("h2", "group-title", "LLM バックエンド");
   const hint = create(
     "p",
     "card-sub",
-    "Ollama にダウンロード済みのモデルから選択します。",
+    "Codex CLI を reasoning effort: low で使用します。",
   );
   hint.style.margin = "4px 0 0";
   titleWrap.append(title, hint);
 
   const refreshBtn = create("button", "group-clear-btn");
-  refreshBtn.title = "モデル一覧を更新";
+  refreshBtn.title = "Codex CLI の状態を更新";
   refreshBtn.dataset.action = "settings-refresh-models";
   refreshBtn.innerHTML =
     '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.33 1.33v4.67h4.67"/><path d="M2.34 10a6 6 0 1 0 1.16-6.52L1.33 6"/></svg>';
@@ -899,56 +910,80 @@ function renderLlmSettingsSection(): HTMLElement {
   header.append(titleWrap, refreshBtn);
   section.append(header);
 
-  const modelLabel = create("label", "card-sub", "使用モデル");
-  modelLabel.style.display = "block";
-  modelLabel.style.margin = "4px 0 6px";
-
-  const select = document.createElement("select");
-  select.className = "prompt-input prompt-select";
-  select.dataset.field = "llm-model";
-
-  const models = Array.from(
-    new Set(
-      state.selectedLlmModel
-        ? [state.selectedLlmModel, ...state.llmModels]
-        : state.llmModels,
-    ),
-  );
-
-  if (models.length === 0) {
-    const option = document.createElement("option");
-    option.value = "";
-    option.textContent = "利用可能なモデルが見つかりません";
-    select.append(option);
-    select.disabled = true;
-  } else {
-    for (const model of models) {
-      const isInstalled = state.llmModels.includes(model);
-      const option = document.createElement("option");
-      option.value = model;
-      option.textContent = isInstalled ? model : `${model} (未検出)`;
-      option.selected = model === state.selectedLlmModel;
-      select.append(option);
-    }
-  }
-
   const current = create(
     "p",
     "card-sub",
     state.selectedLlmModel
-      ? `現在の設定: ${state.selectedLlmModel}`
-      : "現在の設定はまだありません。",
+      ? `現在の設定: ${state.selectedLlmModel} / reasoning: low`
+      : "Codex CLI を確認できませんでした。",
   );
-  current.style.margin = "8px 0 0";
+  current.style.margin = "10px 0 0";
 
-  const actions = create("div", "panel-actions");
-  actions.style.marginTop = "10px";
-  const saveBtn = create("button", "btn", "このモデルを使う");
-  saveBtn.dataset.action = "settings-save-model";
-  saveBtn.toggleAttribute("disabled", models.length === 0);
-  actions.append(saveBtn);
+  section.append(current);
+  return section;
+}
 
-  section.append(modelLabel, select, current, actions);
+function renderUserContextSection(): HTMLElement {
+  const section = create("section", "group");
+  section.style.marginTop = "16px";
+
+  const header = create("div", "group-header");
+  const titleWrap = create("div");
+  const title = create("h2", "group-title", "ユーザーコンテキスト");
+  const hint = create(
+    "p",
+    "card-sub",
+    "あなたの役割・チーム・優先事項など、通知の緊急度判定に役立つ情報を設定します。",
+  );
+  hint.style.margin = "4px 0 0";
+  titleWrap.append(title, hint);
+
+  if (!state.editingUserContext) {
+    const editBtn = create("button", "group-clear-btn");
+    editBtn.title = "編集";
+    editBtn.dataset.action = "settings-edit-user-context";
+    editBtn.innerHTML =
+      '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.33 2a1.89 1.89 0 0 1 2.67 2.67L5.33 13.33 1.33 14.67l1.34-4L11.33 2z"/></svg>';
+    header.append(titleWrap, editBtn);
+  } else {
+    header.append(titleWrap);
+  }
+  section.append(header);
+
+  if (state.editingUserContext) {
+    const textarea = document.createElement("textarea");
+    textarea.className = "prompt-input";
+    textarea.dataset.field = "user-context";
+    textarea.rows = 5;
+    textarea.value = state.userContext;
+    textarea.placeholder =
+      "例: SREチーム所属。本番障害のオンコール担当。上司は田中さん。今週は金曜まで休暇中なので急ぎの判定は緩めに。";
+
+    const actions = create("div", "panel-actions");
+    actions.style.marginTop = "8px";
+    const saveBtn = create("button", "btn", "保存");
+    saveBtn.dataset.action = "settings-save-user-context";
+    const cancelBtn = create("button", "btn btn-secondary", "キャンセル");
+    cancelBtn.dataset.action = "settings-cancel-user-context";
+    actions.append(saveBtn, cancelBtn);
+
+    section.append(textarea, actions);
+  } else if (state.userContext) {
+    const preview = create("p", "card-sub");
+    preview.textContent =
+      state.userContext.length > 120
+        ? state.userContext.slice(0, 120) + "…"
+        : state.userContext;
+    preview.style.margin = "8px 0 0";
+    preview.style.whiteSpace = "pre-wrap";
+    section.append(preview);
+  } else {
+    const empty = create("p", "card-sub", "未設定");
+    empty.style.margin = "8px 0 0";
+    empty.style.opacity = "0.5";
+    section.append(empty);
+  }
+
   return section;
 }
 
@@ -1015,17 +1050,42 @@ function renderPromptForm(editing: {
 }
 
 async function loadSettings(): Promise<void> {
-  try {
-    state.error = "";
-    const [prompts, ignoredApps, llmSettings] = await Promise.all([
+  state.error = "";
+  const [promptsResult, ignoredAppsResult, llmResult, userCtxResult] =
+    await Promise.allSettled([
       invokeCommand<AppPromptEntry[]>("get_app_prompts"),
       invokeCommand<string[]>("get_ignored_apps"),
       invokeCommand<LlmSettings>("get_llm_settings"),
+      invokeCommand<string>("get_user_context"),
     ]);
-    state.prompts = prompts;
-    state.ignoredApps = ignoredApps;
-    state.llmModels = llmSettings.models;
-    state.selectedLlmModel = llmSettings.selectedModel;
+  if (promptsResult.status === "fulfilled") {
+    state.prompts = promptsResult.value;
+  }
+  if (ignoredAppsResult.status === "fulfilled") {
+    state.ignoredApps = ignoredAppsResult.value;
+  }
+  if (llmResult.status === "fulfilled") {
+    state.llmModels = llmResult.value.models;
+    state.selectedLlmModel = llmResult.value.selectedModel;
+  }
+  if (userCtxResult.status === "fulfilled") {
+    state.userContext = userCtxResult.value;
+  }
+  const firstError = [promptsResult, ignoredAppsResult, llmResult, userCtxResult].find(
+    (r) => r.status === "rejected",
+  );
+  if (firstError && firstError.status === "rejected") {
+    state.error = (firstError.reason as Error).message;
+  }
+  render();
+}
+
+async function saveUserContext(text: string): Promise<void> {
+  try {
+    state.error = "";
+    await invokeCommand("set_user_context", { text });
+    state.userContext = text;
+    state.editingUserContext = false;
   } catch (error) {
     state.error = (error as Error).message;
   }
@@ -1072,17 +1132,6 @@ async function removeIgnoredApp(bundleId: string): Promise<void> {
   try {
     state.error = "";
     await invokeCommand("remove_ignored_app", { bundleId });
-    await loadSettings();
-  } catch (error) {
-    state.error = (error as Error).message;
-    render();
-  }
-}
-
-async function saveLlmModel(model: string): Promise<void> {
-  try {
-    state.error = "";
-    await invokeCommand("set_llm_model", { model });
     await loadSettings();
   } catch (error) {
     state.error = (error as Error).message;

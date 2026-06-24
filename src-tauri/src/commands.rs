@@ -205,12 +205,32 @@ pub fn remove_ignored_app(
 }
 
 #[tauri::command]
+pub fn get_user_context(state: State<'_, SharedOrchestrator>) -> Result<String, String> {
+    let guard = state
+        .0
+        .lock()
+        .map_err(|err| format!("state lock error: {err}"))?;
+    Ok(guard.get_user_context())
+}
+
+#[tauri::command]
+pub fn set_user_context(text: String, state: State<'_, SharedOrchestrator>) -> Result<(), String> {
+    let guard = state
+        .0
+        .lock()
+        .map_err(|err| format!("state lock error: {err}"))?;
+    guard
+        .set_user_context(&text)
+        .map_err(|err| format!("failed to save user context: {err}"))
+}
+
+#[tauri::command]
 pub fn get_llm_settings(llm: State<'_, SharedLlm>) -> Result<LlmSettingsResponse, String> {
     let selected_model = llm.0.current_model();
     let models = llm
         .0
         .list_models()
-        .map_err(|err| format!("failed to list Ollama models: {err}"))?;
+        .map_err(|err| format!("failed to check Codex CLI: {err}"))?;
 
     Ok(LlmSettingsResponse {
         selected_model,

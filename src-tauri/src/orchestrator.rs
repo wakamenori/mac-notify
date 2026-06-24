@@ -7,11 +7,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 use log::{error, warn};
 
+use crate::app_log;
 use crate::db::{get_notification_db_path, NotificationDb};
 use crate::focus::{get_focus_assertions_path, FocusModeDetector};
 use crate::llm::{
-    build_analysis_prompt, fallback_analysis, fallback_analysis_with_reason,
-    parse_analysis_response, AppPrompts, IgnoredApps, LlmClient, OLLAMA_BASE_URL,
+    build_analysis_prompt, fallback_analysis_with_reason, parse_analysis_response, AppPrompts,
+    CodexErrorCategory, IgnoredApps, LlmClient, UserContext,
 };
 use crate::models::{
     AnalyzedNotification, FocusState, Notification, NotificationAnalysis, UiNotification,
@@ -29,6 +30,8 @@ pub struct SharedOrchestrator(pub Arc<Mutex<NotifyOrchestrator>>);
 pub struct PollReadResult {
     /// Notifications that need LLM analysis (filtered, with app_context attached).
     pub pending: Vec<(Notification, Option<String>)>,
+    /// User context for LLM prompts (shared across all notifications in the batch).
+    pub user_context: Option<String>,
     /// Whether focus mode just ended and we should notify the user.
     pub focus_ended: bool,
 }
@@ -38,17 +41,33 @@ pub struct NotifyOrchestrator {
     focus_detector: FocusModeDetector,
     app_prompts: AppPrompts,
     ignored_apps: IgnoredApps,
+    user_context: UserContext,
     last_rowid: i64,
     collected: Vec<AnalyzedNotification>,
     was_focused: bool,
+    poll_count: u64,
 }
 
 impl NotifyOrchestrator {
     pub fn new() -> Result<Self> {
         let db_path = get_notification_db_path()?;
         let assertions_path = get_focus_assertions_path();
+        app_log::info(format!(
+            "orchestrator initializing notification_db={} focus_assertions={}",
+            db_path.display(),
+            assertions_path.display()
+        ));
         let mut reader = NotificationDb::new(db_path);
-        let initial_rowid = reader.latest_rowid()?;
+        let initial_rowid = match reader.latest_rowid() {
+            Ok(rowid) => rowid,
+            Err(err) => {
+                app_log::error(format!("notification DB initial read failed error={err:#}"));
+                return Err(err);
+            }
+        };
+        app_log::info(format!(
+            "orchestrator initialized initial_rowid={initial_rowid}"
+        ));
 
         let config_dir = env::var("HOME")
             .map(PathBuf::from)
@@ -56,32 +75,41 @@ impl NotifyOrchestrator {
             .join(".config/notify");
         let app_prompts = AppPrompts::load(&config_dir.join("app_prompts.json"));
         let ignored_apps = IgnoredApps::load(&config_dir.join("ignored_apps.json"));
+        let user_context = UserContext::load(&config_dir.join("user_context.txt"));
 
         Ok(Self {
             reader,
             focus_detector: FocusModeDetector::new(assertions_path),
             app_prompts,
             ignored_apps,
+            user_context,
             last_rowid: initial_rowid,
             collected: Vec::new(),
             was_focused: false,
+            poll_count: 0,
         })
     }
 
     /// Phase 1: Read new notifications from DB and determine focus state.
     /// This is fast (milliseconds) and safe to call while holding the Mutex.
     pub fn poll_read_new(&mut self) -> PollReadResult {
+        self.poll_count = self.poll_count.saturating_add(1);
         let is_focused = self.focus_detector.get_state() == FocusState::Active;
+        let previous_focus = self.was_focused;
         let mut pending = Vec::new();
+        let mut read_count = 0usize;
+        let mut ignored_count = 0usize;
 
         match self.reader.read_new(self.last_rowid) {
             Ok(new_notifications) => {
+                read_count = new_notifications.len();
                 if let Some(last) = new_notifications.last() {
                     self.last_rowid = last.rowid;
                 }
                 if is_focused {
                     for notification in new_notifications {
                         if self.ignored_apps.contains(&notification.bundle_id) {
+                            ignored_count += 1;
                             continue;
                         }
                         let app_context = self
@@ -90,18 +118,63 @@ impl NotifyOrchestrator {
                             .map(|s| s.to_string());
                         pending.push((notification, app_context));
                     }
+                } else if read_count > 0 {
+                    app_log::info(format!(
+                        "notifications read but skipped because focus is inactive count={} last_rowid={}",
+                        read_count, self.last_rowid
+                    ));
                 }
             }
             Err(err) => {
                 error!("Error reading notification DB: {err:#}");
+                app_log::error(format!("notification DB poll read failed error={err:#}"));
             }
         }
 
+        if is_focused != previous_focus {
+            app_log::info(format!(
+                "focus state changed active={} collected_count={}",
+                is_focused,
+                self.collected.len()
+            ));
+        }
+        if read_count > 0 || !pending.is_empty() || ignored_count > 0 {
+            app_log::info(format!(
+                "poll notifications read_count={} pending_count={} ignored_count={} focus_active={} last_rowid={}",
+                read_count,
+                pending.len(),
+                ignored_count,
+                is_focused,
+                self.last_rowid
+            ));
+        } else if self.poll_count == 1 || self.poll_count.is_multiple_of(12) {
+            app_log::info(format!(
+                "poll heartbeat focus_active={} last_rowid={} collected_count={}",
+                is_focused,
+                self.last_rowid,
+                self.collected.len()
+            ));
+        }
+
         let focus_ended = !is_focused && self.was_focused && !self.collected.is_empty();
+        if focus_ended {
+            app_log::info(format!(
+                "focus ended collected_count={}",
+                self.collected.len()
+            ));
+        }
         self.was_focused = is_focused;
+
+        let user_ctx = self.user_context.get();
+        let user_context = if user_ctx.is_empty() {
+            None
+        } else {
+            Some(user_ctx)
+        };
 
         PollReadResult {
             pending,
+            user_context,
             focus_ended,
         }
     }
@@ -113,12 +186,18 @@ impl NotifyOrchestrator {
         if results.is_empty() {
             return false;
         }
+        app_log::info(format!(
+            "analysis results stored count={} previous_collected_count={}",
+            results.len(),
+            self.collected.len()
+        ));
         self.collected.extend(results);
         true
     }
 
     pub fn on_focus_ended(&mut self) {
         let count = self.collected.len();
+        app_log::info(format!("focus ended notification displayed count={count}"));
         show_notification("集中モード終了", &format!("{count}件の通知があります"));
     }
 
@@ -229,6 +308,14 @@ impl NotifyOrchestrator {
         Ok(removed)
     }
 
+    pub fn get_user_context(&self) -> String {
+        self.user_context.get()
+    }
+
+    pub fn set_user_context(&self, text: &str) -> Result<()> {
+        self.user_context.set(text)
+    }
+
     pub fn delete_app_prompt(&mut self, bundle_id: &str) -> Result<bool> {
         let removed = self.app_prompts.remove(bundle_id);
         if removed {
@@ -328,12 +415,13 @@ impl NotifyOrchestrator {
 pub fn analyze_notifications_batch(
     llm: &LlmClient,
     pending: Vec<(Notification, Option<String>)>,
+    user_context: Option<&str>,
 ) -> (Vec<AnalyzedNotification>, Vec<AnalyzedNotification>) {
     let mut results = Vec::new();
     let mut criticals = Vec::new();
 
     for (notification, app_context) in pending {
-        let analysis = analyze_single(llm, &notification, app_context.as_deref());
+        let analysis = analyze_single(llm, &notification, app_context.as_deref(), user_context);
 
         let analyzed = AnalyzedNotification {
             id: notification.rowid,
@@ -361,39 +449,100 @@ fn analyze_single(
     llm: &LlmClient,
     notification: &Notification,
     app_context: Option<&str>,
+    user_context: Option<&str>,
 ) -> NotificationAnalysis {
     if !llm.can_use() {
-        warn!("Ollama is not running at {OLLAMA_BASE_URL}");
+        warn!("Codex CLI is not available");
+        app_log::warn(format!(
+            "analysis skipped codex_unavailable rowid={} bundle_id={}",
+            notification.rowid, notification.bundle_id
+        ));
         return NotificationAnalysis {
             urgency: UrgencyLevel::Medium,
             summary_line: crate::llm::default_summary_line(notification),
-            reason: "Ollamaが起動していないため分析できませんでした。`ollama serve` を実行してください。"
+            reason: "Codex CLIを利用できないため分析できませんでした。Codex CLIまたはCodexアプリがインストールされ、必要に応じて`codex login`済みか確認してください。"
                 .to_string(),
         };
     }
 
-    let prompt = build_analysis_prompt(notification, app_context);
+    let prompt = build_analysis_prompt(notification, app_context, user_context);
+    app_log::info(format!(
+        "analysis started rowid={} bundle_id={} prompt_chars={} app_context={}",
+        notification.rowid,
+        notification.bundle_id,
+        prompt.chars().count(),
+        app_context.is_some()
+    ));
     match llm.generate_text(&prompt) {
         Ok(text) => match parse_analysis_response(&text, notification) {
-            Some(parsed) => return parsed,
-            None => warn!("analysis response parse failed for {}", notification.rowid),
+            Some(parsed) => {
+                app_log::info(format!(
+                    "analysis parsed rowid={} bundle_id={} urgency={:?}",
+                    notification.rowid, notification.bundle_id, parsed.urgency
+                ));
+                parsed
+            }
+            None => {
+                warn!(
+                    "analysis response parse failed for {} (response length: {})",
+                    notification.rowid,
+                    text.len()
+                );
+                app_log::warn(format!(
+                    "analysis parse failed rowid={} bundle_id={} response_chars={}",
+                    notification.rowid,
+                    notification.bundle_id,
+                    text.chars().count()
+                ));
+                fallback_analysis_with_reason(
+                    notification,
+                    "Codex CLIの応答を期待するJSON形式として解析できなかったため、中優先として扱いました。"
+                        .to_string(),
+                )
+            }
         },
         Err(err) => {
             warn!("notification analysis failed: {err:#}");
+            app_log::warn(format!(
+                "analysis failed rowid={} bundle_id={} error={}",
+                notification.rowid,
+                notification.bundle_id,
+                codex_error_summary(&err.to_string())
+            ));
             let detail = err.to_string().to_lowercase();
             if detail.contains("timed out") || detail.contains("timeout") {
-                return fallback_analysis_with_reason(
+                fallback_analysis_with_reason(
                     notification,
                     format!(
-                        "Ollama モデル `{}` の応答がタイムアウトしたため、中優先として扱いました。",
+                        "Codex CLI `{}` の応答がタイムアウトしたため、中優先として扱いました。",
                         llm.current_model()
                     ),
-                );
+                )
+            } else {
+                fallback_analysis_with_reason(
+                    notification,
+                    format!(
+                        "{} 中優先として扱いました。",
+                        codex_error_summary(&err.to_string())
+                    ),
+                )
             }
         }
     }
+}
 
-    fallback_analysis(notification)
+fn codex_error_summary(error: &str) -> String {
+    if error.contains("Codex CLIの実行に失敗しました") {
+        return error.to_string();
+    }
+
+    let category = CodexErrorCategory::classify(error);
+    match category {
+        CodexErrorCategory::Unknown => {
+            format!("Codex CLIの実行に失敗しました（詳細: {error}）。")
+        }
+        _ => category.description().to_string(),
+    }
 }
 
 pub fn app_name_from_bundle(bundle_id: &str) -> String {

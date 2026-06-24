@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod app_log;
 mod commands;
 mod db;
 mod focus;
@@ -22,8 +23,8 @@ use tauri::{
 use commands::{
     add_ignored_app, clear_all_notifications, clear_app_notifications, clear_notification,
     delete_app_prompt, get_app_prompts, get_ignored_apps, get_llm_settings,
-    get_notification_groups, hide_main_window, inject_dummy_notifications, open_app,
-    remove_ignored_app, set_app_prompt, set_llm_model,
+    get_notification_groups, get_user_context, hide_main_window, inject_dummy_notifications,
+    open_app, remove_ignored_app, set_app_prompt, set_llm_model, set_user_context,
 };
 use llm::{LlmClient, SharedLlm};
 use orchestrator::{
@@ -252,6 +253,9 @@ fn start_polling_thread(
     orchestrator: Arc<Mutex<NotifyOrchestrator>>,
     llm: Arc<LlmClient>,
 ) {
+    app_log::info(format!(
+        "polling thread started interval_seconds={POLL_INTERVAL_SECONDS}"
+    ));
     thread::spawn(move || loop {
         // Phase 1: Lock → DB read + filter → Unlock (fast, sub-millisecond)
         let poll_result = {
@@ -259,6 +263,7 @@ fn start_polling_thread(
                 Ok(guard) => guard,
                 Err(err) => {
                     error!("Orchestrator lock poisoned: {err}");
+                    app_log::error(format!("orchestrator lock poisoned phase=read error={err}"));
                     thread::sleep(Duration::from_secs(POLL_INTERVAL_SECONDS));
                     continue;
                 }
@@ -270,8 +275,23 @@ fn start_polling_thread(
         let (analyzed, criticals) = if poll_result.pending.is_empty() {
             (Vec::new(), Vec::new())
         } else {
-            analyze_notifications_batch(&llm, poll_result.pending)
+            app_log::info(format!(
+                "analysis batch started pending_count={}",
+                poll_result.pending.len()
+            ));
+            analyze_notifications_batch(
+                &llm,
+                poll_result.pending,
+                poll_result.user_context.as_deref(),
+            )
         };
+        if !analyzed.is_empty() || !criticals.is_empty() {
+            app_log::info(format!(
+                "analysis batch completed analyzed_count={} critical_count={}",
+                analyzed.len(),
+                criticals.len()
+            ));
+        }
 
         // Phase 3: Lock → store results → Unlock (fast)
         let counts = {
@@ -279,6 +299,9 @@ fn start_polling_thread(
                 Ok(guard) => guard,
                 Err(err) => {
                     error!("Orchestrator lock poisoned: {err}");
+                    app_log::error(format!(
+                        "orchestrator lock poisoned phase=store error={err}"
+                    ));
                     thread::sleep(Duration::from_secs(POLL_INTERVAL_SECONDS));
                     continue;
                 }
@@ -300,6 +323,10 @@ fn start_polling_thread(
 
         // Phase 4: Show critical dialogs (NO lock held, may block on user input)
         for critical in &criticals {
+            app_log::warn(format!(
+                "critical dialog shown rowid={} bundle_id={}",
+                critical.id, critical.bundle_id
+            ));
             let result = show_dialog(
                 "緊急通知",
                 &format!("{}\n{}", critical.title, critical.body),
@@ -311,6 +338,10 @@ fn start_polling_thread(
                     .spawn()
                 {
                     warn!("failed to open app {}: {err}", critical.bundle_id);
+                    app_log::warn(format!(
+                        "failed to open app from critical dialog bundle_id={} error={err}",
+                        critical.bundle_id
+                    ));
                 }
             }
         }
@@ -378,12 +409,18 @@ fn setup_tray(app: &tauri::App) -> Result<tauri::tray::TrayIcon, Box<dyn std::er
 fn main() {
     dotenvy::dotenv().ok();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    app_log::info(format!(
+        "app starting version={} log_path={}",
+        env!("CARGO_PKG_VERSION"),
+        app_log::path().display()
+    ));
 
     let llm = Arc::new(LlmClient::new());
 
     let orchestrator = match NotifyOrchestrator::new() {
         Ok(orchestrator) => Arc::new(Mutex::new(orchestrator)),
         Err(err) => {
+            app_log::error(format!("orchestrator initialization failed error={err:#}"));
             show_startup_error_dialog(&format!("{err:#}"));
             eprintln!("failed to initialize notify: {err:#}");
             std::process::exit(1);
@@ -405,6 +442,8 @@ fn main() {
             get_ignored_apps,
             add_ignored_app,
             remove_ignored_app,
+            get_user_context,
+            set_user_context,
             get_llm_settings,
             set_llm_model,
             hide_main_window,
@@ -418,10 +457,12 @@ fn main() {
             }
         })
         .setup(move |app| {
+            app_log::info("tauri setup started");
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             let tray = setup_tray(app)?;
+            app_log::info("tray initialized");
             app.manage(TrayState(tray));
 
             if let Some(window) = app.get_webview_window("main") {
@@ -441,6 +482,7 @@ fn main() {
             }
             let orchestrator = app.state::<SharedOrchestrator>().0.clone();
             start_polling_thread(app.handle().clone(), orchestrator, llm.clone());
+            app_log::info("tauri setup completed");
             Ok(())
         })
         .run(tauri::generate_context!())
